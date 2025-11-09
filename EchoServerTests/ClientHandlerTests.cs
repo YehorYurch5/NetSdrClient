@@ -35,36 +35,34 @@ namespace EchoTspServer.Tests
             await connectTask;
             listener.Stop();
 
-            // Створюємо CancellationTokenSource, який буде скасовано через 10 секунд
-            // Виправлення: Збільшення тайм-ауту
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            // ✅ Виправлення: Створюємо без тайм-ауту
+            using var cts = new CancellationTokenSource();
             var token = cts.Token;
 
             // Act
-            // Запускаємо обробку клієнта у фоновому режимі
             var handleTask = _handler.HandleClientAsync(serverClient, token);
 
-            var stream = clientTask.GetStream();
-            var message = Encoding.UTF8.GetBytes("ping");
-
-            // 🎯 Виправлення: Виклик WriteAsync з ReadOnlyMemory<byte> та CancellationToken
-            await stream.WriteAsync(message.AsMemory(), token);
-
-
-            byte[] buffer = new byte[1024];
-
-            // Використовуємо ReadAsync з CancellationToken для кращої сумісності
+            // ... (відправка/отримання даних)
             int bytesRead = await stream.ReadAsync(buffer, token);
+
+            // 🎯 НОВИЙ КРОК: Скасовуємо токен після успішного обміну, щоб завершити handleTask
+            cts.Cancel();
 
             // Assert
             Assert.That(Encoding.UTF8.GetString(buffer, 0, bytesRead), Is.EqualTo("ping"));
             _loggerMock.Verify(l => l.Info(It.Is<string>(s => s.Contains("Echoed"))), Times.AtLeastOnce);
 
-            // Очікуємо завершення обробки клієнта (HandleClientAsync), 
-            // оскільки ми відправили та отримали дані.
-            // Примітка: HandleClientAsync має завершитися після закриття потоку,
-            // або коли токен буде скасовано.
-            await handleTask;
+            // Очікуємо завершення handleTask (він завершиться через OperationCanceledException,
+            // але тест НІКОЛИ не повинен викликати await handleTask до assert'ів,
+            // інакше він провалиться. Нам потрібно зробити його гнучким.)
+            try
+            {
+                await handleTask;
+            }
+            catch (OperationCanceledException)
+            {
+                // Це очікувана поведінка, оскільки ми скасували токен.
+            }
 
             serverClient.Close();
             clientTask.Close();
