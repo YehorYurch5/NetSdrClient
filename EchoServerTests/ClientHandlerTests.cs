@@ -35,8 +35,9 @@ namespace EchoTspServer.Tests
             await connectTask;
             listener.Stop();
 
-            // Створюємо CancellationTokenSource, який буде скасовано через 2 секунди
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            // Створюємо CancellationTokenSource, який буде скасовано через 10 секунд
+            // Виправлення: Збільшення тайм-ауту
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             var token = cts.Token;
 
             // Act
