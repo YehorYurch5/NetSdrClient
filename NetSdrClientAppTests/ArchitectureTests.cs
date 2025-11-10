@@ -3,6 +3,7 @@ using NUnit.Framework;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using System; // Додано для Array.Empty
 
 namespace NetSdrClientAppTests
 {
@@ -55,7 +56,7 @@ namespace NetSdrClientAppTests
             Assert.That(result.IsSuccessful, Is.True);
         }
 
-        // НОВИЙ ТЕСТ: Заборона залежностей для демонстрації Червоного PR
+        // НОВИЙ ТЕСТ: Заборона залежностей, виправлений для безпечної обробки Assert.Fail
         [Test]
         public void No_Forbidden_Dependencies()
         {
@@ -73,9 +74,22 @@ namespace NetSdrClientAppTests
                 .HaveDependencyOnAny(forbiddenNamespaces)
                 .GetResult();
 
-            // Якщо тест провалиться, він покаже, який клас порушив правило.
-            Assert.That(result.IsSuccessful, Is.True,
-                $"Знайдено заборонену залежність: {result.FailingTypes.FirstOrDefault()?.FullName}");
+            if (!result.IsSuccessful)
+            {
+                // Безпечно отримуємо список класів, що порушили правило, 
+                // обробляючи можливий null-результат від NetArchTest
+                var failingTypes = result.FailingTypes?
+                    .Select(t => t.FullName)
+                    .ToArray() ?? Array.Empty<string>();
+
+                string message = $"Знайдено заборонену залежність. Порушники: {string.Join(", ", failingTypes)}";
+
+                // Явно провалюємо тест із детальним повідомленням
+                Assert.Fail(message);
+            }
+
+            // Якщо тест успішний, він просто проходить.
+            Assert.Pass();
         }
     }
 }
