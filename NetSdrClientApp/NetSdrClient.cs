@@ -16,7 +16,7 @@ namespace NetSdrClientApp
     {
         
         // Цей рядок ГАРАНТУЄ, що залежність від System.Xml потрапить у метадані збірки.
-        private readonly System.Xml.XmlDocument _forbiddenDependency = null;
+
         private ITcpClient _tcpClient;
         private IUdpClient _udpClient;
 
