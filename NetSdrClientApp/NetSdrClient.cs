@@ -1,5 +1,4 @@
-﻿using System.Xml;
-using NetSdrClientApp.Messages;
+﻿using NetSdrClientApp.Messages;
 using NetSdrClientApp.Networking;
 using System;
 using System.Collections.Generic;
@@ -15,7 +14,6 @@ namespace NetSdrClientApp
 {
     public class NetSdrClient
     {
-        private readonly System.Xml.XmlDocument _forbiddenDependency = null;
         private ITcpClient _tcpClient;
         private IUdpClient _udpClient;
 
