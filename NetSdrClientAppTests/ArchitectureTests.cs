@@ -6,12 +6,14 @@ using System.Text;
 
 namespace NetSdrClientAppTests
 {
-    // Отримуємо збірку NetSdrClientApp один раз
-    // ПРИМІТКА: typeof(NetSdrClientApp.NetSdrClient) має знаходитися в збірці NetSdrClientApp
-    private readonly Assembly ClientAssembly = typeof(NetSdrClientApp.NetSdrClient).Assembly;
-
+    // Клас для тестування архітектурних правил
+    [TestFixture]
     public class ArchitectureTests
     {
+        // ВИПРАВЛЕННЯ CS0116: Поле ClientAssembly оголошено всередині класу і є статичним.
+        // Це дозволяє отримати збірку (Assembly) один раз для всіх тестів.
+        private static readonly Assembly ClientAssembly = typeof(NetSdrClientApp.NetSdrClient).Assembly;
+
         [Test]
         public void App_Should_Not_Depend_On_EchoServer()
         {
@@ -28,7 +30,7 @@ namespace NetSdrClientAppTests
         [Test]
         public void Messages_Should_Not_Depend_On_Networking()
         {
-            // Arrange
+            // Перевіряємо, що шар Messages не залежить від шару Networking (низькорівнева залежність)
             var result = Types.InAssembly(ClientAssembly)
                 .That()
                 .ResideInNamespace("NetSdrClientApp.Messages")
@@ -36,14 +38,13 @@ namespace NetSdrClientAppTests
                 .HaveDependencyOn("NetSdrClientApp.Networking")
                 .GetResult();
 
-            // Assert
             Assert.That(result.IsSuccessful, Is.True);
         }
 
         [Test]
         public void Networking_Should_Not_Depend_On_Messages()
         {
-            // Arrange
+            // Перевіряємо, що шар Networking не залежить від шару Messages (уникнення циклічних залежностей)
             var result = Types.InAssembly(ClientAssembly)
                 .That()
                 .ResideInNamespace("NetSdrClientApp.Networking")
@@ -51,30 +52,28 @@ namespace NetSdrClientAppTests
                 .HaveDependencyOn("NetSdrClientApp.Messages")
                 .GetResult();
 
-            // Assert
             Assert.That(result.IsSuccessful, Is.True);
         }
 
-        // 🎯 НОВИЙ ТЕСТ: Заборона залежностей від небажаних системних бібліотек
+        // НОВИЙ ТЕСТ: Заборона залежностей для демонстрації Червоного PR
         [Test]
         public void No_Forbidden_Dependencies()
         {
             var forbiddenNamespaces = new[]
             {
+                // Це ті простори імен, які ви порушите для демонстрації
                 "System.Xml",
                 "System.Windows.Forms",
                 "System.Data"
-                // Можна додати інші важкі або UI-орієнтовані бібліотеки
             };
 
-            // Забороняємо залежність від цих просторів імен
+            // Забороняємо залежність від цих просторів імен для всієї збірки клієнта
             var result = Types.InAssembly(ClientAssembly)
                 .ShouldNot()
                 .HaveDependencyOnAny(forbiddenNamespaces)
                 .GetResult();
 
-            // Важливо: Якщо тест провалюється, повідомлення Assert покаже, 
-            // який саме клас порушив правило.
+            // Якщо тест провалиться, він покаже, який клас порушив правило.
             Assert.That(result.IsSuccessful, Is.True,
                 $"Знайдено заборонену залежність: {result.FailingTypes.FirstOrDefault()?.FullName}");
         }
