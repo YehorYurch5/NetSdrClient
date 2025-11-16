@@ -61,7 +61,7 @@ namespace EchoTspServer.Tests
         //    // Arrange
         //    var fakeClient = new Mock<TcpClient>();
         //    fakeClient.Setup(c => c.GetStream()).Throws(new Exception("fake fail"));
-
+        //
         //    // Act
         //    await _handler.HandleClientAsync(fakeClient.Object, CancellationToken.None);
 
