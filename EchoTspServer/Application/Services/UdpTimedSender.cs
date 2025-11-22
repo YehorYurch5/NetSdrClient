@@ -2,6 +2,9 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
+using System.Security.Cryptography; // <-- Додано для криптографічно стійкого генератора
+using System.Linq; // Додано для Concat/ToArray
+using System; // Для InvalidOperationException
 
 namespace EchoTspServer.Application.Services
 {
@@ -13,6 +16,9 @@ namespace EchoTspServer.Application.Services
         private readonly UdpClient _udpClient = new();
         private Timer? _timer;
         private ushort _counter = 0;
+
+        // Примітка: Оскільки RandomNumberGenerator.Fill статичний, не потрібно зберігати екземпляр.
+        // Якщо потрібно ініціалізувати поле, це можна зробити, але для Fill він не потрібен.
 
         public UdpTimedSender(string host, int port, ILogger logger)
         {
@@ -33,9 +39,13 @@ namespace EchoTspServer.Application.Services
         {
             try
             {
-                var rnd = new Random();
+                // ❌ ВИДАЛЕНО: var rnd = new Random();
+
                 var samples = new byte[1024];
-                rnd.NextBytes(samples);
+
+                // ✅ ВИПРАВЛЕННЯ: Використовуємо криптографічно стійкий генератор для заповнення масиву
+                RandomNumberGenerator.Fill(samples);
+
                 _counter++;
 
                 var msg = new byte[] { 0x04, 0x84 }
