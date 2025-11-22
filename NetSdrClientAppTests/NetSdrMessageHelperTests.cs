@@ -82,7 +82,11 @@ namespace NetSdrClientAppTests
                 NetSdrMessageHelper.GetControlItemMessage(
                     NetSdrMessageHelper.MsgTypes.SetControlItem,
                     NetSdrMessageHelper.ControlItemCodes.None,
-                    new byte[-1]));
+                    if (msgLength < 0 || lengthWithHeader > _maxMessageLength)
+            {
+                throw new ArgumentException("Message length exceeds allowed value");
+            }
+            ;
         }
 
         [Test]
