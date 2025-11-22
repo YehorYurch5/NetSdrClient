@@ -33,7 +33,7 @@ namespace EchoTspServer.Application.Services
         {
             try
             {
-                var rnd = new Random();
+                var rnd = new Random(); // Non-crypto usage. Safe. (Sonar S2245)
                 var samples = new byte[1024];
                 rnd.NextBytes(samples);
                 _counter++;

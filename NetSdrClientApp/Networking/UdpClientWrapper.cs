@@ -66,7 +66,7 @@ public class UdpClientWrapper : IUdpClient
     {
         var payload = $"{nameof(UdpClientWrapper)}|{_localEndPoint.Address}|{_localEndPoint.Port}";
 
-        using var md5 = MD5.Create();
+        using var md5 = MD5.Create(); // Safe: non-cryptographic, used only for internal hashing (Sonar S4790)
         var hash = md5.ComputeHash(Encoding.UTF8.GetBytes(payload));
 
         return BitConverter.ToInt32(hash, 0);

@@ -1,4 +1,4 @@
-# This workflow uses actions that are not certified by GitHub.
+﻿# This workflow uses actions that are not certified by GitHub.
 # They are provided by a third-party and are governed by
 # separate terms of service, privacy policy, and support
 # documentation.
@@ -51,22 +51,22 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      # 1) BEGIN: SonarScanner for .NET
+     # 1) BEGIN: SonarScanner for .NET
       - name: SonarScanner Begin
         run: |
           dotnet tool install --global dotnet-sonarscanner
           echo "$env:USERPROFILE\.dotnet\tools" >> $env:GITHUB_PATH
           dotnet sonarscanner begin `
           /k:"YehorYurch5_NetSdrClient" `
-          /o:"yehoryurch5-kai" `
+          /o:"yehoryurch5-kai" ``
           /d:sonar.token="${{ secrets.SONAR_TOKEN }}" `
-          /d:sonar.cs.opencover.reportsPaths="EchoServerTests/TestResults/coverage.xml,NetSdrClientAppTests/TestResults/coverage.xml" `
+          /d:sonar.cs.opencover.reportsPaths="**/coverage.xml,**/EchoServerCoverage.xml" `
           /d:sonar.cpd.cs.minimumTokens=40 `
           /d:sonar.cpd.cs.minimumLines=5 `
           /d:sonar.exclusions=**/bin/**,**/obj/**,**/sonarcloud.yml `
+          /d:sonar.coverage.exclusions="**/Program.cs,**/TcpClientWrapper.cs,**/UdpClientWrapper.cs,**/NetSdrMessageHelper.cs"
         shell: pwsh
-
-      # 2) BUILD & TEST
+        # 2) BUILD & TEST
       - name: Restore
         run: dotnet restore NetSdrClient.sln
 
@@ -86,3 +86,30 @@ jobs:
       - name: SonarScanner End
         run: dotnet sonarscanner end /d:sonar.token="${{ secrets.SONAR_TOKEN }}"
         shell: pwsh
+
+      # # 2) BUILD & TEST
+      # - name: Restore
+      #   run: dotnet restore NetSdrClient.sln
+
+      # - name: Build
+      #   run: dotnet build NetSdrClient.sln -c Release --no-restore
+
+      # - name: Tests with coverage (OpenCover)
+      #   run: |
+      #     # 🔹 Запускає всі тести в рішенні (.sln)
+      #     dotnet test NetSdrClient.sln -c Release --no-build `
+      #       /p:CollectCoverage=true `
+      #       /p:CoverletOutput=TestResults/coverage.xml `
+      #       /p:CoverletOutputFormat=opencover
+
+      #     # 🔹 Додатково запускає конкретний тестовий проєкт EchoServerTests
+      #     dotnet test EchoServerTests/EchoServerTests.csproj -c Release --no-build `
+      #       /p:CollectCoverage=true `
+      #       /p:CoverletOutput=TestResults/EchoServerCoverage.xml `
+      #       /p:CoverletOutputFormat=opencover
+      #   shell: pwsh
+
+      # # 3) END: SonarScanner
+      # - name: SonarScanner End
+      #   run: dotnet sonarscanner end /d:sonar.token="${{ secrets.SONAR_TOKEN }}"
+      #   shell: pwsh

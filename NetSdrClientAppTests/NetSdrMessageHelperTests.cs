@@ -1,4 +1,4 @@
-using NetSdrClientApp.Messages;
+﻿using NetSdrClientApp.Messages;
 
 namespace NetSdrClientAppTests
 {
@@ -80,5 +80,37 @@ namespace NetSdrClientAppTests
             Assert.That(samples[0], Is.EqualTo(1));
             Assert.That(samples[1], Is.EqualTo(2));
         }
+
+        // ✅ BEGIN: Lab8 - Added for Sonar & Coverage
+        [Test]
+        public void GetSamples_ZeroLength_ReturnsEmptyArray()
+        {
+            //Arrange
+            ushort sampleSize = 16;
+            byte[] body = Array.Empty<byte>();
+
+            //Act
+            var samples = NetSdrMessageHelper.GetSamples(sampleSize, body).ToArray();
+
+            //Assert
+            Assert.That(samples.Length, Is.EqualTo(0));
+        }
+
+        [Test]
+        public void GetSamples_WrongSampleSize_ReturnsPartialSamples()
+        {
+            //Arrange
+            ushort sampleSize = 16;
+            byte[] body = { 0x01, 0x00, 0x02 }; // 3 bytes → 1.5 sample
+
+            //Act
+            var samples = NetSdrMessageHelper.GetSamples(sampleSize, body).ToArray();
+
+            //Assert
+            Assert.That(samples.Length, Is.EqualTo(1)); // only full sample counted
+            Assert.That(samples[0], Is.EqualTo(1));
+        }
+
+
     }
 }

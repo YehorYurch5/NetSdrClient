@@ -1,6 +1,8 @@
 ﻿using EchoTspServer.Application.Services;
 using EchoTspServer.Infrastructure;
 
+namespace EchoTspServer.Presentation
+{
 class Program
 {
     static async Task Main()
@@ -20,4 +22,5 @@ class Program
         sender.StopSending();
         server.Stop();
     }
+ }
 }
