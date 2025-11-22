@@ -3,6 +3,7 @@ using NUnit.Framework;
 using System.Linq;
 using System;
 using System.Text;
+using System.Collections.Generic;
 
 namespace NetSdrClientAppTests
 {
@@ -25,10 +26,10 @@ namespace NetSdrClientAppTests
             byte[] msg = NetSdrMessageHelper.GetControlItemMessage(type, code, new byte[parametersLength]);
 
             // Assert
-            // 4 bytes (header + code) + 100 bytes parameters = 104
+            // 2 bytes (header) + 2 (code) + 100 (params) = 104
             Assert.That(msg.Length, Is.EqualTo(104));
 
-            // Check code (4 bytes)
+            // Check code (2 bytes)
             var actualCode = BitConverter.ToUInt16(msg.Skip(2).Take(2).ToArray());
             Assert.That(actualCode, Is.EqualTo((ushort)code));
         }
@@ -122,7 +123,7 @@ namespace NetSdrClientAppTests
         // ------------------------------------------------------------------
 
         [Test]
-        public void TranslateMessage_ShouldDecodeControlItem()
+        public void TranslateMessage_ShouldDecodeControlItemCorrectly()
         {
             // Arrange: Create a test message with ControlItemCode
             var type = NetSdrMessageHelper.MsgTypes.SetControlItem;
@@ -146,4 +147,108 @@ namespace NetSdrClientAppTests
         {
             // Arrange: Create a test message with DataItem (DataItem0)
             var type = NetSdrMessageHelper.MsgTypes.DataItem0;
-            byte[] parameters = { 0xAA, 0
+            byte[] parameters = { 0xAA, 0xBB, 0xCC };
+            byte[] msg = NetSdrMessageHelper.GetDataItemMessage(type, parameters);
+
+            // Act
+            bool success = NetSdrMessageHelper.TranslateMessage(msg, out var actualType, out var actualCode, out var sequenceNumber, out var body);
+
+            // Assert
+            Assert.That(success, Is.True);
+            Assert.That(actualType, Is.EqualTo(type));
+            Assert.That(actualCode, Is.EqualTo(NetSdrMessageHelper.ControlItemCodes.None));
+            Assert.That(body, Is.EqualTo(parameters));
+        }
+
+        [Test]
+        public void TranslateMessage_ShouldFailOnInvalidBodyLength()
+        {
+            // Arrange: Створюємо правильний заголовок, але відрізаємо 1 байт від тіла
+            byte[] parameters = { 0xAA, 0xBB };
+            byte[] correctMsg = NetSdrMessageHelper.GetControlItemMessage(NetSdrMessageHelper.MsgTypes.Ack, NetSdrMessageHelper.ControlItemCodes.None, parameters);
+            byte[] corruptedMsg = correctMsg.Take(correctMsg.Length - 1).ToArray();
+
+            // Act
+            bool success = NetSdrMessageHelper.TranslateMessage(corruptedMsg, out var actualType, out var actualCode, out var sequenceNumber, out var body);
+
+            // Assert: Повинно повернути false через невідповідність довжини
+            Assert.That(success, Is.False);
+        }
+
+        [Test]
+        public void TranslateMessage_ShouldFailOnInvalidControlItemCode()
+        {
+            // Arrange: Генеруємо повідомлення з типом Control, але вставляємо неіснуючий код (0xFFFF)
+            var type = NetSdrMessageHelper.MsgTypes.SetControlItem;
+            byte[] header = BitConverter.GetBytes((ushort)((int)type << 13 | (2 + 2))); // Length 4 (header + code)
+            byte[] invalidCode = BitConverter.GetBytes((ushort)0xFFFF); // Код, якого немає в Enum
+            byte[] msg = header.Concat(invalidCode).Concat(new byte[2]).ToArray(); // Total length 6
+
+            // Act
+            bool success = NetSdrMessageHelper.TranslateMessage(msg, out var actualType, out var actualCode, out var sequenceNumber, out var body);
+
+            // Assert: Повинно повернути false, оскільки код не визначений
+            Assert.That(success, Is.False);
+        }
+
+        // ------------------------------------------------------------------
+        // GET SAMPLES TESTS
+        // ------------------------------------------------------------------
+
+        [Test]
+        public void GetSamples_ShouldReturnExpectedIntegers_16Bit()
+        {
+            //Arrange
+            ushort sampleSize = 16; // 2 bytes per sample
+            byte[] body = { 0x01, 0x00, 0x02, 0x00 }; // 2 samples: 1, 2
+
+            //Act
+            var samples = NetSdrMessageHelper.GetSamples(sampleSize, body).ToArray();
+
+            //Assert
+            Assert.That(samples.Length, Is.EqualTo(2));
+            Assert.That(samples[0], Is.EqualTo(1));
+            Assert.That(samples[1], Is.EqualTo(2));
+        }
+
+        [Test]
+        public void GetSamples_ShouldHandle32BitSamples()
+        {
+            // Arrange: Тестуємо 32-бітні семпли (4 байти)
+            ushort sampleSize = 32;
+            byte[] body = { 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00 };
+
+            // Act
+            var samples = NetSdrMessageHelper.GetSamples(sampleSize, body).ToArray();
+
+            // Assert
+            Assert.That(samples.Length, Is.EqualTo(2));
+            Assert.That(samples[0], Is.EqualTo(1));
+            Assert.That(samples[1], Is.EqualTo(2));
+        }
+
+        [Test]
+        public void GetSamples_ShouldThrowOnTooLargeSampleSize()
+        {
+            // Assert: sampleSize > 32 біт
+            ushort sampleSize = 40;
+
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                NetSdrMessageHelper.GetSamples(sampleSize, Array.Empty<byte>()).ToArray());
+        }
+
+        [Test]
+        public void GetSamples_ShouldHandleIncompleteBody()
+        {
+            // Assert: Тіло не кратне розміру семпла (16 біт = 2 байти, але тіло має 1 байт)
+            ushort sampleSize = 16;
+            byte[] body = { 0x01 };
+
+            // Act
+            var samples = NetSdrMessageHelper.GetSamples(sampleSize, body).ToArray();
+
+            // Assert: Має повернути пустий масив
+            Assert.That(samples.Length, Is.EqualTo(0));
+        }
+    }
+}
