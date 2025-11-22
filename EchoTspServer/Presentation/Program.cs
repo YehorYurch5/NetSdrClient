@@ -1,23 +1,37 @@
 ﻿using EchoTspServer.Application.Services;
 using EchoTspServer.Infrastructure;
+using System; // Додано для Console, ConsoleKey
+using System.Threading.Tasks;
 
-class Program
+// ✅ ВИПРАВЛЕННЯ: Додано іменований простір імен, як вимагає SonarCloud (S3903)
+namespace EchoTspServer.Presentation
 {
-    static async Task Main()
+    class Program
     {
-        var logger = new ConsoleLogger();
-        var handler = new ClientHandler(logger);
-        var server = new EchoServer(5000, logger, handler);
+        static async Task Main()
+        {
+            var logger = new ConsoleLogger();
+            var handler = new ClientHandler(logger);
 
-        _ = Task.Run(() => server.StartAsync());
+            // Note: Тут використовується 5000, logger, handler. 
+            // Якщо у конструкторі EchoServer немає порту, його варто прибрати.
+            // Я залишаю, як у вашому коді, припускаючи, що конструктор правильний.
+            var server = new EchoServer(5000, logger, handler);
 
-        var sender = new UdpTimedSender("127.0.0.1", 60000, logger);
-        sender.StartSending(5000);
+            // Запускаємо StartAsync у фоновому режимі, щоб не блокувати Main
+            // Використовуємо _ = для ігнорування повернення Task, але уникнення попередження
+            _ = Task.Run(() => server.StartAsync());
 
-        Console.WriteLine("Press 'q' to quit...");
-        while (Console.ReadKey(intercept: true).Key != ConsoleKey.Q) { }
+            var sender = new UdpTimedSender("127.0.0.1", 60000, logger);
+            sender.StartSending(5000);
 
-        sender.StopSending();
-        server.Stop();
+            Console.WriteLine("Press 'q' to quit...");
+
+            // Цикл очікування команди на вихід
+            while (Console.ReadKey(intercept: true).Key != ConsoleKey.Q) { }
+
+            sender.StopSending();
+            server.Stop();
+        }
     }
 }
