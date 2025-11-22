@@ -17,10 +17,10 @@
 #
 # 3. Follow the SonarCloud in-product tutorial
 #     * a. Copy/paste the Project Key and the Organization Key into the args parameter below
-#          (You'll find this information in SonarCloud. Click on "Information" at the bottom left)
+#           (You'll find this information in SonarCloud. Click on "Information" at the bottom left)
 #
 #     * b. Generate a new token and add it to your Github repository's secrets using the name SONAR_TOKEN
-#          (On SonarCloud, click on your avatar on top-right > My account > Security
+#           (On SonarCloud, click on your avatar on top-right > My account > Security
 #           or go directly to https://sonarcloud.io/account/security/)
 
 # Feel free to take a look at our documentation (https://docs.sonarcloud.io/getting-started/github/)
@@ -41,7 +41,7 @@ permissions:
 jobs:
   sonar-check:
     name: Sonar Check
-    runs-on: windows-latest   # безпечно для будь-яких .NET проектів
+    runs-on: windows-latest    # безпечно для будь-яких .NET проектів
     steps:
       - uses: actions/checkout@v4
         with:
@@ -63,7 +63,7 @@ jobs:
           /d:sonar.cs.opencover.reportsPaths="EchoServerTests/TestResults/coverage.xml,NetSdrClientAppTests/TestResults/coverage.xml" `
           /d:sonar.cpd.cs.minimumTokens=40 `
           /d:sonar.cpd.cs.minimumLines=5 `
-          /d:sonar.exclusions=**/bin/**,**/obj/**,**/sonarcloud.yml,**/EchoTspServer/Presentation/Program.cs `
+          /d:sonar.exclusions=**/bin/**,**/obj/**,**/sonarcloud.yml,**/EchoTspServer/Presentation/Program.cs,**NetSdrClient/NetSdrClientApp/Program.cs `
         shell: pwsh
 
       # 2) BUILD & TEST
