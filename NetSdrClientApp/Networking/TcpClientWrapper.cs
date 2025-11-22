@@ -5,35 +5,12 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
+// Припускаємо, що ITcpClient, ISystemTcpClient, INetworkStream вже оголошені
+// в інших файлах, таких як ITcpClient.cs та INetworkStream.cs
+
 namespace NetSdrClientApp.Networking
 {
-    public interface INetworkStream : IDisposable
-    {
-        bool CanRead { get; }
-        bool CanWrite { get; }
-        void Close();
-        Task<int> ReadAsync(byte[] buffer, int offset, int size, CancellationToken cancellationToken);
-        Task WriteAsync(byte[] buffer, int offset, int size, CancellationToken cancellationToken);
-    }
-
-    public interface ITcpClient
-    {
-        bool Connected { get; }
-        event EventHandler<byte[]>? MessageReceived;
-        void Connect();
-        void Disconnect();
-        Task SendMessageAsync(byte[] data);
-        Task SendMessageAsync(string str);
-    }
-
-    public interface ISystemTcpClient : IDisposable
-    {
-        bool Connected { get; }
-        INetworkStream GetStream();
-        void Connect(string host, int port);
-        void Close();
-    }
-
+    // Адаптер для реального TcpClient (може залишатися тут або бути перенесеним)
     public class SystemTcpClientAdapter : ISystemTcpClient
     {
         private readonly TcpClient _client;
@@ -44,9 +21,11 @@ namespace NetSdrClientApp.Networking
         public void Connect(string host, int port) => _client.Connect(host, port);
         public void Dispose() => _client.Dispose();
 
+        // Повертаємо адаптер для NetworkStream
         public INetworkStream GetStream() => new NetworkStreamAdapter(_client.GetStream());
     }
 
+    // Адаптер для NetworkStream (може залишатися тут або бути перенесеним)
     public class NetworkStreamAdapter : INetworkStream
     {
         private readonly NetworkStream _stream;
@@ -67,29 +46,35 @@ namespace NetSdrClientApp.Networking
 
     // -------------------------------------------------------------
 
+    // Основний клас. Тепер використовує зовнішні інтерфейси
     public class TcpClientWrapper : ITcpClient
     {
         private readonly string _host;
         private readonly int _port;
+
+        // 🎯 Використовуємо ISystemTcpClient (визначений десь окремо)
         private ISystemTcpClient? _tcpClient;
         private INetworkStream? _stream;
-        private CancellationTokenSource? _cts;
+        private CancellationTokenSource _cts;
 
         public bool Connected => _tcpClient != null && _tcpClient.Connected && _stream != null;
 
         public event EventHandler<byte[]>? MessageReceived;
 
+        // Фабрика для створення реальних клієнтів
         private readonly Func<ISystemTcpClient> _clientFactory;
 
+        // Конструктор для Production-коду
         public TcpClientWrapper(string host, int port)
             : this(host, port, () => new SystemTcpClientAdapter(new TcpClient())) { }
 
+        // Конструктор для DI та тестування
         public TcpClientWrapper(string host, int port, Func<ISystemTcpClient> clientFactory)
         {
             _host = host;
             _port = port;
             _clientFactory = clientFactory;
-            // Removed CS8618 fix by making _cts nullable
+            _cts = new CancellationTokenSource();
         }
 
         public void Connect()
@@ -124,7 +109,7 @@ namespace NetSdrClientApp.Networking
                 _stream?.Close();
                 _tcpClient?.Close();
 
-                _cts = null;
+                _cts = null!;
                 _tcpClient = null;
                 _stream = null;
                 Console.WriteLine("Disconnected.");
@@ -137,7 +122,7 @@ namespace NetSdrClientApp.Networking
 
         public async Task SendMessageAsync(byte[] data)
         {
-            if (Connected && _stream != null && _stream.CanWrite && _cts != null)
+            if (Connected && _stream != null && _stream.CanWrite)
             {
                 Console.WriteLine($"Message sent: " + data.Select(b => Convert.ToString(b, toBase: 16)).Aggregate((l, r) => $"{l} {r}"));
                 await _stream.WriteAsync(data, 0, data.Length, _cts.Token);
@@ -151,7 +136,7 @@ namespace NetSdrClientApp.Networking
         public async Task SendMessageAsync(string str)
         {
             var data = Encoding.UTF8.GetBytes(str);
-            if (Connected && _stream != null && _stream.CanWrite && _cts != null)
+            if (Connected && _stream != null && _stream.CanWrite)
             {
                 Console.WriteLine($"Message sent: " + data.Select(b => Convert.ToString(b, toBase: 16)).Aggregate((l, r) => $"{l} {r}"));
                 await _stream.WriteAsync(data, 0, data.Length, _cts.Token);
@@ -164,11 +149,7 @@ namespace NetSdrClientApp.Networking
 
         private async Task StartListeningAsync()
         {
-            if (_cts == null)
-            {
-                throw new InvalidOperationException("Cancellation token source is not initialized.");
-            }
-            var token = _cts.Token;
+            var token = _cts!.Token;
 
             if (Connected && _stream != null && _stream.CanRead)
             {
