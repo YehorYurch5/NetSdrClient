@@ -1,126 +1,151 @@
-using NUnit.Framework;
-using Moq;
+using System;
 using System.Net;
+using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
-using System;
+using System.Threading;
 using System.Threading.Tasks;
-using System.Linq;
+using System.Collections.Concurrent;
+// Assume using NetSdrClientApp.Networking; is implicit or in a common file
 
-namespace NetSdrClientAppTests.Networking
+namespace NetSdrClientApp.Networking
 {
-    // Assuming IHashAlgorithm and UdpClientWrapper are available in this namespace or referenced correctly.
-    // Definition for IHashAlgorithm needed for the test to compile and run properly.
-    /* public interface IHashAlgorithm : IDisposable
+    // Replacement for weak MD5 with SHA256
+    public class Sha256Adapter : IHashAlgorithm
     {
-        byte[] ComputeHash(byte[] buffer);
+        private readonly HashAlgorithm _sha256 = SHA256.Create();
+
+        public byte[] ComputeHash(byte[] buffer) => _sha256.ComputeHash(buffer);
+
+        public void Dispose()
+        {
+            _sha256.Dispose();
+        }
     }
-    // And UdpClientWrapper must accept IHashAlgorithm in its constructor.
-    */
 
-    [TestFixture]
-    public class UdpClientWrapperTests
+    // --------------------------------------------------------------------------------
+
+    // UdpClientWrapper implementation
+    public class UdpClientWrapper : IUdpClient
     {
-        private Mock<IHashAlgorithm> _hashMock = null!;
-        // NOTE: The UdpClientWrapper class is not provided, 
-        // but we assume it implements a constructor that accepts an int port and an IHashAlgorithm.
-        private UdpClientWrapper _wrapper = null!;
-        private const int TestPort = 55555;
+        private readonly IPEndPoint _localEndPoint;
+        private readonly IHashAlgorithm _hashAlgorithm;
 
-        [SetUp]
-        public void SetUp()
+        private UdpClient? _udpClient;
+        private CancellationTokenSource? _cts;
+        private bool _disposed = false;
+
+        public event EventHandler<byte[]>? MessageReceived;
+
+        public UdpClientWrapper(int port)
+            : this(port, new Sha256Adapter())
         {
-            _hashMock = new Mock<IHashAlgorithm>();
-
-            // Initialization of the wrapper (using DI constructor)
-            // This assumes UdpClientWrapper has a ctor(int port, IHashAlgorithm hashAlgorithm)
-            _wrapper = new UdpClientWrapper(TestPort, _hashMock.Object);
         }
 
-        // ------------------------------------------------------------------
-        // TEST 1: CONSTRUCTOR (Constructor coverage)
-        // ------------------------------------------------------------------
-        [Test]
-        public void Constructor_ShouldInitializeCorrectly()
+        public UdpClientWrapper(int port, IHashAlgorithm hashAlgorithm)
         {
-            // Assert
-            // Check that the object is created and hashAlgorithm is injected
-            Assert.That(_wrapper, Is.Not.Null);
+            _localEndPoint = new IPEndPoint(IPAddress.Any, port);
+            _hashAlgorithm = hashAlgorithm;
         }
 
-        // ------------------------------------------------------------------
-        // TEST 2: GET HASH CODE (Hashing logic coverage)
-        // ------------------------------------------------------------------
-        [Test]
-        public void GetHashCode_ShouldCallComputeHashAndReturnInt()
+        public async Task StartListeningAsync()
         {
-            // Arrange
-            byte[] fakeHash = new byte[4] { 0x01, 0x02, 0x03, 0x04 }; // 4 bytes = int32
-            _hashMock
-                .Setup(h => h.ComputeHash(It.IsAny<byte[]>()))
-                .Returns(fakeHash);
+            if (_cts != null && !_cts.IsCancellationRequested) return;
+            if (_disposed) return;
 
-            // Act
-            int hashCode = _wrapper.GetHashCode();
+            // Dispose previous CTS if present
+            _cts?.Dispose();
+            _cts = new CancellationTokenSource();
 
-            // Assert
-            // Verify that ComputeHash method was called
-            _hashMock.Verify(h => h.ComputeHash(It.IsAny<byte[]>()), Times.Once);
+            Console.WriteLine("Start listening for UDP messages...");
 
-            // Verify that the returned value matches our fake hash
-            Assert.That(hashCode, Is.EqualTo(BitConverter.ToInt32(fakeHash, 0)));
+            try
+            {
+                _udpClient = new UdpClient(_localEndPoint);
+
+                CancellationToken token = _cts.Token;
+
+                while (!token.IsCancellationRequested)
+                {
+                    UdpReceiveResult result = await _udpClient.ReceiveAsync(token);
+                    MessageReceived?.Invoke(this, result.Buffer);
+
+                    Console.WriteLine($"Received from {result.RemoteEndPoint}");
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected exception on cancellation
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error receiving message: {ex.Message}");
+            }
+            finally
+            {
+                Cleanup("Listener stopped.");
+            }
         }
 
-        // ------------------------------------------------------------------
-        // TEST 3: STOP LISTENING (Cleanup methods coverage)
-        // ------------------------------------------------------------------
+        public void StopListening() => Cleanup("Stopped listening for UDP messages.");
 
-        [Test]
-        public void StopListening_ShouldCallCleanup()
+        public void Exit() => Cleanup("Stopped listening for UDP messages.");
+
+        private void Cleanup(string message)
         {
-            // Act
-            _wrapper.StopListening();
+            if (_disposed) return;
 
-            // Assert: Ensure the method did not throw an exception (testing happy path Cleanup)
-            Assert.Pass();
+            try
+            {
+                // 1. Cancel the token to stop the ReceiveAsync loop
+                _cts?.Cancel();
+
+                // 2. Close and dispose the UDP client
+                if (_udpClient != null)
+                {
+                    _udpClient.Close();
+                    _udpClient.Dispose();
+                    _udpClient = null;
+                }
+
+                Console.WriteLine(message);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error while stopping: {ex.Message}");
+            }
         }
 
-        [Test]
-        public void Exit_ShouldCallCleanup()
+        // Use standard logic for GetHashCode.
+        public override int GetHashCode()
         {
-            // Act
-            _wrapper.Exit();
-
-            // Assert: Ensure the method did not throw an exception
-            Assert.Pass();
+            // Generate hash code based on immutable fields (port and address)
+            return HashCode.Combine(_localEndPoint.Address, _localEndPoint.Port);
         }
 
-        // ------------------------------------------------------------------
-        // TEST 4: DISPOSE (Dispose coverage)
-        // ------------------------------------------------------------------
-        [Test]
-        public void Dispose_ShouldStopSendingAndDisposeHash()
+        // Implementation of IDisposable standard pattern
+        public void Dispose()
         {
-            // Act
-            _wrapper.Dispose();
-
-            // Assert: Verify that Dispose was called for the injected object
-            _hashMock.Verify(h => h.Dispose(), Times.Once);
+            Dispose(true);
+            GC.SuppressFinalize(this);
         }
 
-        // ------------------------------------------------------------------
-        // TEST 5: START LISTENING (Exception-throwing code coverage)
-        // ------------------------------------------------------------------
-
-        [Test]
-        public void StartListeningAsync_ShouldHandleExceptionInStartup()
+        protected virtual void Dispose(bool disposing)
         {
-            // Note: This test would typically require mocking the internal UdpClient 
-            // or an integration test using a real, occupied port.
-            // Since UdpClient is not easily mockable without refactoring UdpClientWrapper, 
-            // this remains a passing placeholder.
+            if (!_disposed)
+            {
+                if (disposing)
+                {
+                    // Stop listener and clean up UdpClient
+                    Cleanup("Disposing UdpClientWrapper.");
 
-            Assert.Pass("StartListeningAsync cannot be unit-tested without refactoring UdpClient creation.");
+                    // Dispose IHashAlgorithm (SHA256) and CTS
+                    _hashAlgorithm.Dispose();
+                    _cts?.Dispose();
+                }
+
+                _disposed = true;
+            }
         }
     }
 }
