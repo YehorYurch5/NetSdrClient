@@ -1,32 +1,40 @@
 using NUnit.Framework;
 using Moq;
+using System.Threading.Tasks;
+using System;
+using System.Threading;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
-using System;
-using System.Threading.Tasks;
 using System.Linq;
-// FIX: Додаємо using для доступу до UdpClientWrapper, IUdpClient та IHashAlgorithm
+// FIX: Add using directive to resolve CS0246 errors for IHashAlgorithm and UdpClientWrapper
 using NetSdrClientApp.Networking;
 
 namespace NetSdrClientAppTests.Networking
 {
-    // Assuming IHashAlgorithm and UdpClientWrapper are available in this namespace or referenced correctly.
+    // FIX: Changed namespace back to NetSdrClientAppTests.Networking based on the error output context.
     [TestFixture]
     public class UdpClientWrapperTests
     {
-        private Mock<IHashAlgorithm> _hashMock = null!; // Error CS0246 fixed by using directive
-        private UdpClientWrapper _wrapper = null!; // Error CS0246 fixed by using directive
+        private Mock<IHashAlgorithm> _hashMock = null!;
+        // Non-nullable field requires initialization in SetUp or constructor, and disposal in TearDown
+        private UdpClientWrapper _wrapper = null!;
         private const int TestPort = 55555;
 
         [SetUp]
         public void SetUp()
         {
             _hashMock = new Mock<IHashAlgorithm>();
-            // Initialization of the wrapper (using DI constructor)
-            // This assumes UdpClientWrapper has a ctor(int port, IHashAlgorithm hashAlgorithm)
             _wrapper = new UdpClientWrapper(TestPort, _hashMock.Object);
         }
+
+        // FIX NUnit1032: Dispose the IDisposable field (_wrapper) after each test run.
+        [TearDown]
+        public void TearDown()
+        {
+            _wrapper?.Dispose();
+        }
+
 
         // ------------------------------------------------------------------
         // TEST 1: CONSTRUCTOR (Constructor coverage)
@@ -47,19 +55,15 @@ namespace NetSdrClientAppTests.Networking
         {
             // Arrange
             byte[] fakeHash = new byte[4] { 0x01, 0x02, 0x03, 0x04 }; // 4 bytes = int32
-                                                                      // NOTE: Since UdpClientWrapper now uses HashCode.Combine in GetHashCode(), 
-                                                                      // the mock setup for ComputeHash and Assert logic below is NO LONGER VALID.
-                                                                      // We verify that the test does NOT call ComputeHash anymore and relies on C#'s internal Hashing.
 
             // Act
             int hashCode = _wrapper.GetHashCode();
 
             // Assert
-            // Verify that ComputeHash method was NOT called (because UdpClientWrapper now uses HashCode.Combine)
+            // Verify that ComputeHash method was NOT called (UdpClientWrapper uses HashCode.Combine now)
             _hashMock.Verify(h => h.ComputeHash(It.IsAny<byte[]>()), Times.Never);
 
-            // Verify that the hash code is generated (We cannot assert the exact value easily
-            // as HashCode.Combine changes between runs, but we ensure it's calculated)
+            // Verify that the hash code is generated 
             Assert.That(hashCode, Is.Not.EqualTo(0));
         }
 
@@ -108,10 +112,7 @@ namespace NetSdrClientAppTests.Networking
         [Test]
         public void StartListeningAsync_ShouldHandleExceptionInStartup()
         {
-            // Note: This test would typically require mocking the internal UdpClient 
-            // or an integration test using a real, occupied port.
-            // Since UdpClient is not easily mockable without refactoring UdpClientWrapper, 
-            // this remains a passing placeholder.
+            // Note: This test is a placeholder and should pass without testing asynchronous logic.
             Assert.Pass("StartListeningAsync cannot be unit-tested without refactoring UdpClient creation.");
         }
     }
