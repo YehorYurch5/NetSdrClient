@@ -9,11 +9,8 @@ using System.Collections.Concurrent;
 
 namespace NetSdrClientApp.Networking
 {
-    // Interface for hash algorithm abstraction
-    public interface IHashAlgorithm : IDisposable
-    {
-        byte[] ComputeHash(byte[] buffer);
-    }
+    // Оголошення інтерфейсів IHashAlgorithm та IUdpClient видалено,
+    // оскільки вони знаходяться у файлі IUdpClient.cs і спричиняють помилки дублювання.
 
     // Replacement for weak MD5 with SHA256
     public class Sha256Adapter : IHashAlgorithm
@@ -29,15 +26,6 @@ namespace NetSdrClientApp.Networking
     }
 
     // --------------------------------------------------------------------------------
-
-    // Interface for the UDP client wrapper
-    public interface IUdpClient : IDisposable
-    {
-        Task StartListeningAsync();
-        void StopListening();
-        void Exit();
-        event EventHandler<byte[]>? MessageReceived;
-    }
 
     // UdpClientWrapper implementation
     public class UdpClientWrapper : IUdpClient
@@ -67,6 +55,7 @@ namespace NetSdrClientApp.Networking
             if (_cts != null && !_cts.IsCancellationRequested) return;
             if (_disposed) return;
 
+            // Dispose previous CTS if present
             _cts?.Dispose();
             _cts = new CancellationTokenSource();
 
