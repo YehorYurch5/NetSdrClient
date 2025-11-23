@@ -1,10 +1,22 @@
-﻿
-public interface IUdpClient
+﻿using System;
+using System.Threading.Tasks;
+
+namespace NetSdrClientApp.Networking
 {
-    event EventHandler<byte[]>? MessageReceived;
+    // Interface for hash algorithm abstraction (used by Sha256Adapter)
+    public interface IHashAlgorithm : IDisposable
+    {
+        byte[] ComputeHash(byte[] buffer);
+    }
 
-    Task StartListeningAsync();
+    // Interface for the UDP client wrapper. Implements IDisposable.
+    public interface IUdpClient : IDisposable
+    {
+        event EventHandler<byte[]>? MessageReceived;
 
-    void StopListening();
-    void Exit();
+        Task StartListeningAsync();
+
+        void StopListening();
+        void Exit();
+    }
 }

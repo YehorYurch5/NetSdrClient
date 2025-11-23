@@ -1,8 +1,5 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.IO;
 using System.Linq;
-using System.Net.Http;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
@@ -10,22 +7,71 @@ using System.Threading.Tasks;
 
 namespace NetSdrClientApp.Networking
 {
+    // Adapter for the real TcpClient
+    public class SystemTcpClientAdapter : ISystemTcpClient
+    {
+        private readonly TcpClient _client;
+
+        public SystemTcpClientAdapter(TcpClient client) => _client = client;
+        public bool Connected => _client.Connected;
+        public void Close() => _client.Close();
+        public void Connect(string host, int port) => _client.Connect(host, port);
+        public void Dispose() => _client.Dispose();
+
+        // Return adapter for NetworkStream
+        public INetworkStream GetStream() => new NetworkStreamAdapter(_client.GetStream());
+    }
+
+    // Adapter for NetworkStream
+    public class NetworkStreamAdapter : INetworkStream
+    {
+        private readonly NetworkStream _stream;
+
+        public NetworkStreamAdapter(NetworkStream stream) => _stream = stream;
+
+        public bool CanRead => _stream.CanRead;
+        public bool CanWrite => _stream.CanWrite;
+        public void Close() => _stream.Close();
+        public void Dispose() => _stream.Dispose();
+
+        public Task<int> ReadAsync(byte[] buffer, int offset, int size, CancellationToken cancellationToken)
+            => _stream.ReadAsync(buffer, offset, size, cancellationToken);
+
+        public Task WriteAsync(byte[] buffer, int offset, int size, CancellationToken cancellationToken)
+            => _stream.WriteAsync(buffer, offset, size, cancellationToken);
+    }
+
+    // -------------------------------------------------------------
+
+    // Main wrapper class
     public class TcpClientWrapper : ITcpClient
     {
-        private string _host;
-        private int _port;
-        private TcpClient? _tcpClient;
-        private NetworkStream? _stream;
-        private CancellationTokenSource _cts;
+        private readonly string _host;
+        private readonly int _port;
+
+        private ISystemTcpClient? _tcpClient;
+        private INetworkStream? _stream;
+        // Змінено на nullable для безпечного використання у Disconnect()
+        private CancellationTokenSource? _cts;
 
         public bool Connected => _tcpClient != null && _tcpClient.Connected && _stream != null;
 
         public event EventHandler<byte[]>? MessageReceived;
 
+        // Factory for creating actual clients
+        private readonly Func<ISystemTcpClient> _clientFactory;
+
+        // Constructor for Production code
         public TcpClientWrapper(string host, int port)
+            : this(host, port, () => new SystemTcpClientAdapter(new TcpClient())) { }
+
+        // Constructor for DI and testing
+        public TcpClientWrapper(string host, int port, Func<ISystemTcpClient> clientFactory)
         {
             _host = host;
             _port = port;
+            _clientFactory = clientFactory;
+            // Ініціалізація _cts тут не потрібна для Connected=false, зробимо це в Connect()
         }
 
         public void Connect()
@@ -36,11 +82,14 @@ namespace NetSdrClientApp.Networking
                 return;
             }
 
-            _tcpClient = new TcpClient();
+            _tcpClient = _clientFactory();
 
             try
             {
+                // Скидаємо старий CTS (якщо він був)
+                _cts?.Dispose();
                 _cts = new CancellationTokenSource();
+
                 _tcpClient.Connect(_host, _port);
                 _stream = _tcpClient.GetStream();
                 Console.WriteLine($"Connected to {_host}:{_port}");
@@ -49,20 +98,35 @@ namespace NetSdrClientApp.Networking
             catch (Exception ex)
             {
                 Console.WriteLine($"Failed to connect: {ex.Message}");
+                // Ensure resources are nullified on failure
+                _tcpClient = null;
+                _stream = null;
+                _cts?.Dispose();
+                _cts = null;
             }
         }
 
         public void Disconnect()
         {
-            if (Connected)
-            {
-                _cts?.Cancel();
-                _stream?.Close();
-                _tcpClient?.Close();
+            // Використовуємо локальну змінну для безпечного доступу
+            var clientToClose = Interlocked.Exchange(ref _tcpClient, null);
 
+            if (clientToClose != null)
+            {
+                // Скасування слухача
+                _cts?.Cancel();
+
+                // Закриття ресурсів
+                _stream?.Close();
+                clientToClose.Close();
+
+                // Утилізація CTS
+                _cts?.Dispose();
                 _cts = null;
-                _tcpClient = null;
+
+                // Скидання stream
                 _stream = null;
+
                 Console.WriteLine("Disconnected.");
             }
             else
@@ -76,7 +140,8 @@ namespace NetSdrClientApp.Networking
             if (Connected && _stream != null && _stream.CanWrite)
             {
                 Console.WriteLine($"Message sent: " + data.Select(b => Convert.ToString(b, toBase: 16)).Aggregate((l, r) => $"{l} {r}"));
-                await _stream.WriteAsync(data, 0, data.Length);
+                // Перевірка _cts на null не потрібна, якщо Connected=true
+                await _stream.WriteAsync(data, 0, data.Length, _cts!.Token);
             }
             else
             {
@@ -90,7 +155,7 @@ namespace NetSdrClientApp.Networking
             if (Connected && _stream != null && _stream.CanWrite)
             {
                 Console.WriteLine($"Message sent: " + data.Select(b => Convert.ToString(b, toBase: 16)).Aggregate((l, r) => $"{l} {r}"));
-                await _stream.WriteAsync(data, 0, data.Length);
+                await _stream.WriteAsync(data, 0, data.Length, _cts!.Token);
             }
             else
             {
@@ -100,26 +165,37 @@ namespace NetSdrClientApp.Networking
 
         private async Task StartListeningAsync()
         {
-            if (Connected && _stream != null && _stream.CanRead)
+            // Надійна перевірка на null
+            if (_cts == null || _stream == null) return;
+
+            var token = _cts.Token;
+
+            if (Connected && _stream.CanRead)
             {
                 try
                 {
                     Console.WriteLine($"Starting listening for incomming messages.");
 
-                    while (!_cts.Token.IsCancellationRequested)
+                    while (!token.IsCancellationRequested)
                     {
                         byte[] buffer = new byte[8194];
 
-                        int bytesRead = await _stream.ReadAsync(buffer, 0, buffer.Length, _cts.Token);
+                        int bytesRead = await _stream.ReadAsync(buffer, 0, buffer.Length, token);
+
+                        if (bytesRead == 0)
+                        {
+                            break; // Connection closed by remote host
+                        }
+
                         if (bytesRead > 0)
                         {
                             MessageReceived?.Invoke(this, buffer.AsSpan(0, bytesRead).ToArray());
                         }
                     }
                 }
-                catch (OperationCanceledException ex)
+                catch (OperationCanceledException)
                 {
-                    //empty
+                    // Cancellation requested
                 }
                 catch (Exception ex)
                 {
@@ -128,13 +204,14 @@ namespace NetSdrClientApp.Networking
                 finally
                 {
                     Console.WriteLine("Listener stopped.");
+                    // Disconnect is called here, which closes resources and cleans up state.
+                    Disconnect();
                 }
             }
             else
             {
-                throw new InvalidOperationException("Not connected to a server.");
+                // Internal method, no action needed if not connected
             }
         }
     }
-
 }
