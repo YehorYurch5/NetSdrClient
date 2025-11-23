@@ -232,4 +232,82 @@ namespace NetSdrClientAppTests
             bool success = NetSdrMessageHelper.TranslateMessage(msg, out var actualType, out var actualCode, out var sequenceNumber, out var body);
 
             // Assert: Should fail because remainingLength < _msgSequenceNumberLength
-            Assert.
+            Assert.That(success, Is.False);
+        }
+
+
+        // ------------------------------------------------------------------
+        // GET SAMPLES TESTS
+        // ------------------------------------------------------------------
+
+        [Test]
+        public void GetSamples_ShouldReturnExpectedIntegers_16Bit()
+        {
+            //Arrange
+            ushort sampleSize = 16; // 2 bytes per sample
+            byte[] body = { 0x01, 0x00, 0x02, 0x00 }; // 2 samples: 1, 2
+
+            //Act
+            var samples = NetSdrMessageHelper.GetSamples(sampleSize, body).ToArray();
+
+            //Assert
+            Assert.That(samples.Length, Is.EqualTo(2));
+            Assert.That(samples[0], Is.EqualTo(1));
+            Assert.That(samples[1], Is.EqualTo(2));
+        }
+
+        [Test]
+        public void GetSamples_ShouldHandle32BitSamples()
+        {
+            // Arrange: Testing 32-bit samples (4 bytes)
+            ushort sampleSize = 32;
+            byte[] body = { 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00 };
+
+            // Act
+            var samples = NetSdrMessageHelper.GetSamples(sampleSize, body).ToArray();
+
+            // Assert
+            Assert.That(samples.Length, Is.EqualTo(2));
+            Assert.That(samples[0], Is.EqualTo(1));
+            Assert.That(samples[1], Is.EqualTo(2));
+        }
+
+        [Test]
+        public void GetSamples_ShouldThrowOnTooLargeSampleSize()
+        {
+            // Assert: sampleSize > 32 bits
+            ushort sampleSize = 40;
+
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                NetSdrMessageHelper.GetSamples(sampleSize, Array.Empty<byte>()).ToArray());
+        }
+
+        [Test]
+        public void GetSamples_ShouldHandleIncompleteBody()
+        {
+            // Assert: Body is not a multiple of the sample size (16 bits = 2 bytes, body has 1 byte)
+            ushort sampleSize = 16;
+            byte[] body = { 0x01 };
+
+            // Act
+            var samples = NetSdrMessageHelper.GetSamples(sampleSize, body).ToArray();
+
+            // Assert: Should return an empty array
+            Assert.That(samples.Length, Is.EqualTo(0));
+        }
+
+        [Test]
+        public void GetSamples_ShouldHandleEmptyBody()
+        {
+            // Arrange
+            ushort sampleSize = 16;
+            byte[] emptyBody = Array.Empty<byte>();
+
+            // Act
+            var samples = NetSdrMessageHelper.GetSamples(sampleSize, emptyBody).ToArray();
+
+            // Assert
+            Assert.That(samples, Is.Empty);
+        }
+    }
+}
