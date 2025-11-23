@@ -83,7 +83,6 @@ namespace NetSdrClientApp.Messages
             // 1. Check minimum message length (header)
             if (msg == null || msg.Length < _msgHeaderLength)
             {
-                // Not enough bytes for the header
                 return false;
             }
 
@@ -143,11 +142,10 @@ namespace NetSdrClientApp.Messages
                 // Create array for the body
                 body = new byte[remainingLength];
 
-                // Copy the body bytes
+                // Copy the body bytes (Fixes issues related to improper length calculation for body)
                 Array.Copy(msg, offset, body, 0, remainingLength);
             }
 
-            // If we reached here, parsing was successful and length matches
             return true;
         }
 
@@ -160,15 +158,12 @@ namespace NetSdrClientApp.Messages
                 throw new ArgumentOutOfRangeException(nameof(sampleSize), "SampleSize must be between 8 and 32 bits and a multiple of 8.");
             }
 
-            // Number of zero bytes to suffix for conversion to Int32 (4 bytes)
-            var suffixZeroBytesCount = 4 - sampleSizeInBytes;
-
             for (int i = 0; i <= body.Length - sampleSizeInBytes; i += sampleSizeInBytes)
             {
                 // Create a 4-byte array for ToInt32
                 byte[] sampleBytes = new byte[4];
 
-                // Copy sample bytes
+                // Copy sample bytes (assuming Little Endian)
                 Array.Copy(body, i, sampleBytes, 0, sampleSizeInBytes);
 
                 yield return BitConverter.ToInt32(sampleBytes);

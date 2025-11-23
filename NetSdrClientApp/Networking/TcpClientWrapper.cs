@@ -70,6 +70,7 @@ namespace NetSdrClientApp.Networking
             _host = host;
             _port = port;
             _clientFactory = clientFactory;
+            // Initialize CTS here to ensure it's never null
             _cts = new CancellationTokenSource();
         }
 
@@ -85,12 +86,9 @@ namespace NetSdrClientApp.Networking
 
             try
             {
-                // Create a new CTS only if needed
-                if (_cts == null || _cts.IsCancellationRequested)
-                {
-                    _cts?.Dispose();
-                    _cts = new CancellationTokenSource();
-                }
+                // Dispose and create a new CTS when establishing a new connection
+                _cts?.Dispose();
+                _cts = new CancellationTokenSource();
 
                 _tcpClient.Connect(_host, _port);
                 _stream = _tcpClient.GetStream();
@@ -108,18 +106,24 @@ namespace NetSdrClientApp.Networking
 
         public void Disconnect()
         {
-            if (Connected)
+            // Only attempt to disconnect if resources were initialized
+            if (_tcpClient != null)
             {
+                // Cancel the listening task
                 _cts?.Cancel();
-                _stream?.Close();
-                _tcpClient?.Close();
 
-                // Dispose and reset CTS to a known state
+                // Close stream and client
+                _stream?.Close();
+                _tcpClient.Close();
+
+                // Dispose and reset CTS 
                 _cts?.Dispose();
                 _cts = new CancellationTokenSource();
 
+                // Reset internal state
                 _tcpClient = null;
                 _stream = null;
+
                 Console.WriteLine("Disconnected.");
             }
             else
@@ -157,6 +161,7 @@ namespace NetSdrClientApp.Networking
 
         private async Task StartListeningAsync()
         {
+            // CTS is initialized in constructor, so it's safe to use
             var token = _cts.Token;
 
             if (Connected && _stream != null && _stream.CanRead)

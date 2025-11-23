@@ -31,7 +31,7 @@ namespace NetSdrClientAppTests.Networking
 
             // Setup ReadAsync to block indefinitely unless cancelled, 
             // simulating an active connection that doesn't immediately close.
-            // This prevents the background listener task from immediately ending.
+            // This prevents the background listener task from immediately ending in most tests.
             _streamMock
                 .Setup(s => s.ReadAsync(
                     It.IsAny<byte[]>(),
@@ -59,9 +59,7 @@ namespace NetSdrClientAppTests.Networking
         [Test]
         public void Connect_WhenNotConnected_ShouldConnectAndStartListening()
         {
-            // Arrange: Ensure initial state is not connected by setting up the mock factory
-            // We use the mock factory to ensure a fresh mock is returned which starts as not connected.
-            _clientMock.SetupGet(c => c.Connected).Returns(false); // Default connected status for the mock
+            // Arrange: Initial state relies on _tcpClient being null, so _wrapper.Connected is false.
 
             // Act
             _wrapper.Connect();
@@ -71,6 +69,7 @@ namespace NetSdrClientAppTests.Networking
             _clientMock.Verify(c => c.Connect("127.0.0.1", 5000), Times.Once);
             // 2. Verify that the stream was retrieved
             _clientMock.Verify(c => c.GetStream(), Times.Once);
+            // FIX: Assert must pass if Connect() was successful and set internal fields
             Assert.That(_wrapper.Connected, Is.True);
         }
 
@@ -82,9 +81,6 @@ namespace NetSdrClientAppTests.Networking
         public async Task Disconnect_WhenConnected_ShouldCloseResources()
         {
             // Arrange: 
-            // 1. Force the wrapper to be in a connected state (simulating successful Connect)
-            // Note: Since Connect() starts the listener, we need to ensure the listener task 
-            // is running before Disconnect is called.
             _wrapper.Connect();
             // Allow a small delay for the background listener task to start.
             await Task.Delay(50);
@@ -97,19 +93,16 @@ namespace NetSdrClientAppTests.Networking
 
             // Assert: Verify all Close/Cancel were called
             _streamMock.Verify(s => s.Close(), Times.Once);
-            // FIX: The real client's Close() must be called once.
             _clientMock.Verify(c => c.Close(), Times.Once);
 
             // Verify that Connected is now false
-            // Check the internal state by verifying Disconnect cleaned up resources (_tcpClient becomes null).
             Assert.That(_wrapper.Connected, Is.False);
         }
 
         [Test]
         public void Disconnect_WhenNotConnected_ShouldDoNothing()
         {
-            // Arrange: Initial state (Connected = false)
-            // Note: The wrapper starts disconnected unless Connect() is called.
+            // Arrange: The wrapper starts disconnected
 
             // Act
             _wrapper.Disconnect();
@@ -160,7 +153,6 @@ namespace NetSdrClientAppTests.Networking
                 It.Is<byte[]>(arr => arr == testData),
                 0,
                 testData.Length,
-                // The CancellationToken is passed from the wrapper's internal CTS
                 It.IsAny<CancellationToken>()),
                 Times.Once);
         }
@@ -171,7 +163,6 @@ namespace NetSdrClientAppTests.Networking
             // Arrange: The wrapper starts in a disconnected state (Connected = false)
 
             // Act & Assert
-            // The Connected property should handle the null _tcpClient case.
             Assert.ThrowsAsync<InvalidOperationException>(
                 () => _wrapper.SendMessageAsync(new byte[] { 0x01 }));
         }
@@ -220,18 +211,26 @@ namespace NetSdrClientAppTests.Networking
             // Allow a small delay for the background listener task to start.
             await Task.Delay(50);
 
-            // Simulate ReadAsync returning 0 (end of stream)
+            // FIX: Ensure that the mock returns 0 bytes read on the first attempt 
+            // after the listener starts to properly simulate remote closure.
             _streamMock
-                .Setup(s => s.ReadAsync(
+                .SetupSequence(s => s.ReadAsync(
                     It.IsAny<byte[]>(),
                     It.IsAny<int>(),
                     It.IsAny<int>(),
                     It.IsAny<CancellationToken>()))
-                .ReturnsAsync(0);
+                // First call: returns 0 (EOF) -> triggers finally block -> Disconnect()
+                .ReturnsAsync(0)
+                // Subsequent calls should not happen if logic is correct, but safe fallback
+                .Returns<byte[], int, int, CancellationToken>((buffer, offset, size, token) =>
+                {
+                    var tcs = new TaskCompletionSource<int>();
+                    token.Register(() => tcs.TrySetCanceled());
+                    return tcs.Task;
+                });
 
             // Act
-            // Since ReadAsync returns 0 immediately, the listener task will break the loop 
-            // and call Disconnect in its finally block. We just wait for that to happen.
+            // We wait for the ReadAsync(0) to complete and trigger the Disconnect call in the finally block.
             await Task.Delay(100);
 
             // Assert: Verify that resource closure was called by the listener's finally block -> Disconnect()
