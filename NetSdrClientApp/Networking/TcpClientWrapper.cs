@@ -51,7 +51,8 @@ namespace NetSdrClientApp.Networking
 
         private ISystemTcpClient? _tcpClient;
         private INetworkStream? _stream;
-        private CancellationTokenSource _cts;
+        // Змінено на nullable для безпечного використання у Disconnect()
+        private CancellationTokenSource? _cts;
 
         public bool Connected => _tcpClient != null && _tcpClient.Connected && _stream != null;
 
@@ -70,8 +71,7 @@ namespace NetSdrClientApp.Networking
             _host = host;
             _port = port;
             _clientFactory = clientFactory;
-            // Initialize CTS here to ensure it's never null
-            _cts = new CancellationTokenSource();
+            // Ініціалізація _cts тут не потрібна для Connected=false, зробимо це в Connect()
         }
 
         public void Connect()
@@ -86,7 +86,7 @@ namespace NetSdrClientApp.Networking
 
             try
             {
-                // Dispose and create a new CTS when establishing a new connection
+                // Скидаємо старий CTS (якщо він був)
                 _cts?.Dispose();
                 _cts = new CancellationTokenSource();
 
@@ -101,27 +101,30 @@ namespace NetSdrClientApp.Networking
                 // Ensure resources are nullified on failure
                 _tcpClient = null;
                 _stream = null;
+                _cts?.Dispose();
+                _cts = null;
             }
         }
 
         public void Disconnect()
         {
-            // Only attempt to disconnect if resources were initialized
-            if (_tcpClient != null)
+            // Використовуємо локальну змінну для безпечного доступу
+            var clientToClose = Interlocked.Exchange(ref _tcpClient, null);
+
+            if (clientToClose != null)
             {
-                // Cancel the listening task
+                // Скасування слухача
                 _cts?.Cancel();
 
-                // Close stream and client
+                // Закриття ресурсів
                 _stream?.Close();
-                _tcpClient.Close();
+                clientToClose.Close();
 
-                // Dispose and reset CTS 
+                // Утилізація CTS
                 _cts?.Dispose();
-                _cts = new CancellationTokenSource();
+                _cts = null;
 
-                // Reset internal state
-                _tcpClient = null;
+                // Скидання stream
                 _stream = null;
 
                 Console.WriteLine("Disconnected.");
@@ -137,7 +140,8 @@ namespace NetSdrClientApp.Networking
             if (Connected && _stream != null && _stream.CanWrite)
             {
                 Console.WriteLine($"Message sent: " + data.Select(b => Convert.ToString(b, toBase: 16)).Aggregate((l, r) => $"{l} {r}"));
-                await _stream.WriteAsync(data, 0, data.Length, _cts.Token);
+                // Перевірка _cts на null не потрібна, якщо Connected=true
+                await _stream.WriteAsync(data, 0, data.Length, _cts!.Token);
             }
             else
             {
@@ -151,7 +155,7 @@ namespace NetSdrClientApp.Networking
             if (Connected && _stream != null && _stream.CanWrite)
             {
                 Console.WriteLine($"Message sent: " + data.Select(b => Convert.ToString(b, toBase: 16)).Aggregate((l, r) => $"{l} {r}"));
-                await _stream.WriteAsync(data, 0, data.Length, _cts.Token);
+                await _stream.WriteAsync(data, 0, data.Length, _cts!.Token);
             }
             else
             {
@@ -161,10 +165,12 @@ namespace NetSdrClientApp.Networking
 
         private async Task StartListeningAsync()
         {
-            // CTS is initialized in constructor, so it's safe to use
+            // Надійна перевірка на null
+            if (_cts == null || _stream == null) return;
+
             var token = _cts.Token;
 
-            if (Connected && _stream != null && _stream.CanRead)
+            if (Connected && _stream.CanRead)
             {
                 try
                 {

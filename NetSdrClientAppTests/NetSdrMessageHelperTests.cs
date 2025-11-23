@@ -132,7 +132,13 @@ namespace NetSdrClientAppTests
         {
             // Arrange: Create a test message with DataItem (DataItem0)
             var type = NetSdrMessageHelper.MsgTypes.DataItem0;
-            byte[] parameters = { 0xAA, 0xBB, 0xCC };
+            // The body returned by TranslateMessage for DataItem includes the sequence number (2 bytes)
+            // and the user parameters. The current NetSdrMessageHelper.cs implementation, 
+            // after extracting the sequence number, should return only the parameters in 'body'.
+            byte[] parameters = { 0xAA, 0xBB, 0xCC }; // 3 bytes of actual data
+
+            // GetDataItemMessage creates the full message with parameters but no code.
+            // When TranslateMessage runs, it extracts sequenceNumber (2 bytes) and returns the rest (parameters).
             byte[] msg = NetSdrMessageHelper.GetDataItemMessage(type, parameters);
 
             // Act
@@ -142,13 +148,15 @@ namespace NetSdrClientAppTests
             Assert.That(success, Is.True);
             Assert.That(actualType, Is.EqualTo(type));
             Assert.That(actualCode, Is.EqualTo(NetSdrMessageHelper.ControlItemCodes.None));
+
+            // FIX: Asserting that the body contains only the original parameters.
             Assert.That(body, Is.EqualTo(parameters));
         }
 
         [Test]
         public void TranslateMessage_ShouldFailOnInvalidBodyLength()
         {
-            // Arrange: Створюємо правильний заголовок, але відрізаємо 1 байт від тіла
+            // Arrange: Create a correct header but truncate 1 byte from the body
             byte[] parameters = { 0xAA, 0xBB };
             byte[] correctMsg = NetSdrMessageHelper.GetControlItemMessage(NetSdrMessageHelper.MsgTypes.Ack, NetSdrMessageHelper.ControlItemCodes.None, parameters);
             byte[] corruptedMsg = correctMsg.Take(correctMsg.Length - 1).ToArray();
@@ -156,23 +164,23 @@ namespace NetSdrClientAppTests
             // Act
             bool success = NetSdrMessageHelper.TranslateMessage(corruptedMsg, out var actualType, out var actualCode, out var sequenceNumber, out var body);
 
-            // Assert: Повинно повернути false через невідповідність довжини
+            // Assert: Should return false due to length mismatch
             Assert.That(success, Is.False);
         }
 
         [Test]
         public void TranslateMessage_ShouldFailOnInvalidControlItemCode()
         {
-            // Arrange: Генеруємо повідомлення з типом Control, але вставляємо неіснуючий код (0xFFFF)
+            // Arrange: Generate a Control message type but insert a non-existent code (0xFFFF)
             var type = NetSdrMessageHelper.MsgTypes.SetControlItem;
             byte[] header = BitConverter.GetBytes((ushort)((int)type << 13 | (2 + 2))); // Length 4 (header + code)
-            byte[] invalidCode = BitConverter.GetBytes((ushort)0xFFFF); // Код, якого немає в Enum
+            byte[] invalidCode = BitConverter.GetBytes((ushort)0xFFFF); // Code not defined in Enum
             byte[] msg = header.Concat(invalidCode).Concat(new byte[2]).ToArray(); // Total length 6
 
             // Act
             bool success = NetSdrMessageHelper.TranslateMessage(msg, out var actualType, out var actualCode, out var sequenceNumber, out var body);
 
-            // Assert: Повинно повернути false, оскільки код не визначений
+            // Assert: Should return false because the code is not defined
             Assert.That(success, Is.False);
         }
 
@@ -199,7 +207,7 @@ namespace NetSdrClientAppTests
         [Test]
         public void GetSamples_ShouldHandle32BitSamples()
         {
-            // Arrange: Тестуємо 32-бітні семпли (4 байти)
+            // Arrange: Testing 32-bit samples (4 bytes)
             ushort sampleSize = 32;
             byte[] body = { 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00 };
 
@@ -215,7 +223,7 @@ namespace NetSdrClientAppTests
         [Test]
         public void GetSamples_ShouldThrowOnTooLargeSampleSize()
         {
-            // Assert: sampleSize > 32 біт
+            // Assert: sampleSize > 32 bits
             ushort sampleSize = 40;
 
             Assert.Throws<ArgumentOutOfRangeException>(() =>
@@ -225,14 +233,14 @@ namespace NetSdrClientAppTests
         [Test]
         public void GetSamples_ShouldHandleIncompleteBody()
         {
-            // Assert: Тіло не кратне розміру семпла (16 біт = 2 байти, але тіло має 1 байт)
+            // Assert: Body is not a multiple of the sample size (16 bits = 2 bytes, body has 1 byte)
             ushort sampleSize = 16;
             byte[] body = { 0x01 };
 
             // Act
             var samples = NetSdrMessageHelper.GetSamples(sampleSize, body).ToArray();
 
-            // Assert: Має повернути пустий масив
+            // Assert: Should return an empty array
             Assert.That(samples.Length, Is.EqualTo(0));
         }
     }

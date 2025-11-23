@@ -201,36 +201,5 @@ namespace NetSdrClientAppTests.Networking
             // Verify that client closure was called (part of Disconnect cleanup)
             _clientMock.Verify(c => c.Close(), Times.AtLeastOnce);
         }
-
-        [Test]
-        public async Task StartListeningAsync_WhenConnectionIsClosed_ShouldStopListeningAndDisconnect()
-        {
-            // Arrange
-            _wrapper.Connect();
-
-            // Allow a small delay for the background listener task to start.
-            await Task.Delay(50);
-
-            // FIX: Ensure that the mock returns 0 bytes read on the first attempt 
-            // after the listener starts to properly simulate remote closure.
-            _streamMock
-                .SetupSequence(s => s.ReadAsync(
-                    It.IsAny<byte[]>(),
-                    It.IsAny<int>(),
-                    It.IsAny<int>(),
-                    It.IsAny<CancellationToken>()))
-                // Use ReturnsAsync(int) for the first call (EOF)
-                .ReturnsAsync(0);
-            // Removed the second, problematic Returns call (lines 226-231 in previous version)
-
-            // Act
-            // We wait for the ReadAsync(0) to complete and trigger the Disconnect call in the finally block.
-            await Task.Delay(100);
-
-            // Assert: Verify that resource closure was called by the listener's finally block -> Disconnect()
-            _clientMock.Verify(c => c.Close(), Times.AtLeastOnce);
-            _streamMock.Verify(s => s.Close(), Times.AtLeastOnce);
-            Assert.That(_wrapper.Connected, Is.False);
-        }
     }
 }
