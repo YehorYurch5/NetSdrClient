@@ -1,379 +1,235 @@
-using NetSdrClientApp.Messages;
 using NUnit.Framework;
-using System.Linq;
+using Moq;
+using System.Threading.Tasks;
 using System;
+using System.Threading;
+using System.Net;
+using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
-using System.Collections.Generic;
+using System.Linq;
+using NetSdrClientApp.Networking;
+using System.Reflection;
 
-namespace NetSdrClientAppTests
+namespace NetSdrClientAppTests.Networking
 {
     [TestFixture]
-    public class NetSdrMessageHelperTests
+    public class UdpClientWrapperTests
     {
-        // ------------------------------------------------------------------
-        // GET MESSAGE TESTS
-        // ------------------------------------------------------------------
+        private Mock<IHashAlgorithm> _hashMock = null!;
+        private UdpClientWrapper _wrapper = null!;
+        private int _testPort; // Instance field for the port
 
+        // Helper to get an available dynamic port to avoid conflicts
+        private int GetAvailablePort()
+        {
+            using (var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp))
+            {
+                // Bind to 0, which tells OS to find a free port
+                socket.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+                return ((IPEndPoint)socket.LocalEndPoint!).Port;
+            }
+        }
+
+        [SetUp]
+        public void SetUp()
+        {
+            _hashMock = new Mock<IHashAlgorithm>();
+            _testPort = GetAvailablePort(); // Get a unique port for the test fixture
+            _wrapper = new UdpClientWrapper(_testPort, _hashMock.Object);
+        }
+
+        [TearDown]
+        public void TearDown()
+        {
+            _wrapper?.Dispose();
+        }
+
+        // Helper to access private fields for testing internal state
+        private T? GetPrivateField<T>(string fieldName) where T : class
+        {
+            var field = typeof(UdpClientWrapper).GetField(fieldName, BindingFlags.NonPublic | BindingFlags.Instance);
+            return (T?)field?.GetValue(_wrapper);
+        }
+
+        private void SetPrivateField(string fieldName, object? value)
+        {
+            var field = typeof(UdpClientWrapper).GetField(fieldName, BindingFlags.NonPublic | BindingFlags.Instance);
+            field?.SetValue(_wrapper, value);
+        }
+
+
+        // ------------------------------------------------------------------
+        // TEST 1: CONSTRUCTOR 
+        // ------------------------------------------------------------------
         [Test]
-        public void GetControlItemMessageTest_WithItemCode()
+        public void Constructor_ShouldInitializeCorrectly()
+        {
+            Assert.That(_wrapper, Is.Not.Null);
+        }
+
+        // ------------------------------------------------------------------
+        // TEST 2: GET HASH CODE (FIXED: Reliable hash check)
+        // ------------------------------------------------------------------
+        [Test]
+        public void GetHashCode_ShouldReturnConsistentHash()
         {
             // Arrange
-            var type = NetSdrMessageHelper.MsgTypes.Ack;
-            var code = NetSdrMessageHelper.ControlItemCodes.ReceiverState;
-            int parametersLength = 100;
+            // Using a new, temporary wrapper for comparison
+            var wrapper2 = new UdpClientWrapper(GetPrivateField<IPEndPoint>("_localEndPoint")!.Port, _hashMock.Object);
 
             // Act
-            byte[] msg = NetSdrMessageHelper.GetControlItemMessage(type, code, new byte[parametersLength]);
+            int hashCode1 = _wrapper.GetHashCode();
+            int hashCode2 = wrapper2.GetHashCode();
 
             // Assert
-            // 2 bytes (header) + 2 (code) + 100 (params) = 104
-            Assert.That(msg.Length, Is.EqualTo(104));
+            Assert.That(hashCode1, Is.EqualTo(hashCode2));
+            Assert.That(hashCode1, Is.Not.EqualTo(0), "Hash code should not be default 0.");
+        }
 
-            // Check code (2 bytes)
-            var actualCode = BitConverter.ToUInt16(msg.Skip(2).Take(2).ToArray());
-            Assert.That(actualCode, Is.EqualTo((ushort)code));
+        // ------------------------------------------------------------------
+        // TEST 3: STOP LISTENING/CLEANUP LOGIC (FIXED: Avoids Moq limitations and SocketException)
+        // ------------------------------------------------------------------
+
+        [Test]
+        public void StopListening_ShouldCancelTokenAndCleanupUdpClient()
+        {
+            // Arrange: Simulate StartListeningAsync having run successfully
+            var cts = new CancellationTokenSource();
+
+            // We must create a real UdpClient to ensure Cleanup can call .Close() and .Dispose() without NRE, 
+            // but we use a *different* port than the wrapper's main port.
+            var tempClient = new UdpClient(GetAvailablePort());
+
+            SetPrivateField("_cts", cts);
+            SetPrivateField("_udpClient", tempClient);
+
+            // Act
+            _wrapper.StopListening();
+
+            // Assert
+            // 1. Verify that the cancellation was requested
+            Assert.That(cts.IsCancellationRequested, Is.True, "Cancellation token should be cancelled.");
+
+            // 2. Verify that UdpClient field is nullified after Cleanup.
+            Assert.That(GetPrivateField<UdpClient>("_udpClient"), Is.Null, "Internal UdpClient should be nullified after Cleanup.");
         }
 
         [Test]
-        public void GetControlItemMessageTest_WithoutItemCode()
+        public void Exit_ShouldCancelTokenAndCleanupUdpClient()
+        {
+            // Arrange: Simulate running state
+            var cts = new CancellationTokenSource();
+            var tempClient = new UdpClient(GetAvailablePort());
+
+            SetPrivateField("_cts", cts);
+            SetPrivateField("_udpClient", tempClient);
+
+            // Act
+            _wrapper.Exit();
+
+            // Assert
+            Assert.That(cts.IsCancellationRequested, Is.True);
+            Assert.That(GetPrivateField<UdpClient>("_udpClient"), Is.Null, "Internal UdpClient should be nullified after Exit/Cleanup.");
+        }
+
+        // ------------------------------------------------------------------
+        // TEST 4: DISPOSE (Coverage: Dispose(bool), IDisposable implementation)
+        // ------------------------------------------------------------------
+
+        [Test]
+        public void Dispose_ShouldCallCleanupDisposeHashAndMarkAsDisposed()
         {
             // Arrange
-            var type = NetSdrMessageHelper.MsgTypes.Ack;
-            var code = NetSdrMessageHelper.ControlItemCodes.None;
-            int parametersLength = 100;
+            var cts = new CancellationTokenSource();
+            SetPrivateField("_cts", cts);
 
             // Act
-            byte[] msg = NetSdrMessageHelper.GetControlItemMessage(type, code, new byte[parametersLength]);
+            _wrapper.Dispose();
 
             // Assert
-            // 2 bytes (header) + 100 bytes parameters = 102
-            Assert.That(msg.Length, Is.EqualTo(102));
+            // 1. Verify HashAlgorithm dispose
+            _hashMock.Verify(h => h.Dispose(), Times.Once, "IHashAlgorithm should be disposed.");
+
+            // 2. Verify cancellation
+            Assert.That(cts.IsCancellationRequested, Is.True, "Dispose should call Cleanup, which cancels CTS.");
+
+            // 3. Verify idempotency
+            _wrapper.Dispose();
+            _hashMock.Verify(h => h.Dispose(), Times.Once, "Dispose should be idempotent.");
         }
 
+        // ------------------------------------------------------------------
+        // TEST 5: START LISTENING (Asynchronous logic coverage - NEW TESTS)
+        // ------------------------------------------------------------------
+
         [Test]
-        public void GetDataItemMessageTest_NormalLength()
+        public async Task StartListeningAsync_ShouldReceiveDataAndRaiseEvent()
         {
             // Arrange
-            var type = NetSdrMessageHelper.MsgTypes.DataItem2;
-            int parametersLength = 7500;
+            byte[] expectedData = Encoding.ASCII.GetBytes("TestPacket");
+            byte[] receivedData = Array.Empty<byte>();
+            var receivedTcs = new TaskCompletionSource<bool>();
 
-            // Act
-            byte[] msg = NetSdrMessageHelper.GetDataItemMessage(type, new byte[parametersLength]);
+            _wrapper.MessageReceived += (sender, data) =>
+            {
+                receivedData = data;
+                receivedTcs.SetResult(true);
+            };
 
-            // Assert (Check if the header is correct)
-            var headerBytes = msg.Take(2);
-            var num = BitConverter.ToUInt16(headerBytes.ToArray());
-            var actualType = (NetSdrMessageHelper.MsgTypes)(num >> 13);
-            var actualLength = num & 0x1FFF; // Use mask for clarity
+            var listeningTask = _wrapper.StartListeningAsync();
 
-            // TranslateHeader logic:
-            // msgLength = 7500 + 2 = 7502 (Length in header)
-            Assert.That(msg.Length, Is.EqualTo(7502));
-            Assert.That(actualLength, Is.EqualTo(7502));
-            Assert.That(type, Is.EqualTo(actualType));
+            // Allow a small delay for UdpClient to initialize and start listening
+            await Task.Delay(100);
+
+            // Act: Send data using a separate client
+            using (var sender = new UdpClient())
+            {
+                var targetEndpoint = new IPEndPoint(IPAddress.Loopback, _testPort);
+                await sender.SendAsync(expectedData, targetEndpoint);
+            }
+
+            // Assert: Wait for the event to be raised (or timeout after 1 second)
+            Assert.That(await receivedTcs.Task.WaitAsync(TimeSpan.FromSeconds(1)), Is.True, "MessageReceived event was not raised.");
+            Assert.That(receivedData, Is.EqualTo(expectedData), "Received data does not match expected data.");
         }
 
         [Test]
-        public void GetHeader_ThrowsExceptionOnTooLongMessage()
-        {
-            // Arrange / Act / Assert
-            // _maxMessageLength = 8191. (8190 + 2) = 8192 > 8191
-            int tooLongLength = 8190;
-
-            Assert.Throws<ArgumentException>(() =>
-                NetSdrMessageHelper.GetControlItemMessage(
-                    NetSdrMessageHelper.MsgTypes.SetControlItem,
-                    NetSdrMessageHelper.ControlItemCodes.None,
-                    new byte[tooLongLength]));
-        }
-
-        [Test]
-        public void GetHeader_DataItemEdgeCaseZeroLength()
-        {
-            // _maxDataItemMessageLength = 8194. lengthWithHeader = msgLength + 2. msgLength = 8192
-            int msgLength = 8192;
-
-            // Act: Call GetMessage, which calls GetHeader
-            byte[] msg = NetSdrMessageHelper.GetDataItemMessage(
-                NetSdrMessageHelper.MsgTypes.DataItem0,
-                new byte[msgLength]);
-
-            // Assert: Check that the actual length in the header is 0
-            var headerBytes = msg.Take(2).ToArray();
-            var num = BitConverter.ToUInt16(headerBytes);
-
-            // Extract type and length from header
-            var actualType = (NetSdrMessageHelper.MsgTypes)(num >> 13);
-            var actualLengthInHeader = num & 0x1FFF;
-
-            Assert.That(actualLengthInHeader, Is.EqualTo(0)); // Length field in header should be 0
-            Assert.That(msg.Length, Is.EqualTo(8194)); // Actual physical length is 8194
-            Assert.That(actualType, Is.EqualTo(NetSdrMessageHelper.MsgTypes.DataItem0));
-        }
-
-        // --- NEW TEST 1: Check exception on negative length ---
-        [Test]
-        public void GetHeader_ThrowsExceptionOnNegativeLength()
-        {
-            // Arrange: Negative length for message body
-            int negativeLength = -1;
-
-            // Act & Assert
-            Assert.Throws<ArgumentException>(() =>
-                NetSdrMessageHelper.GetDataItemMessage(
-                    NetSdrMessageHelper.MsgTypes.DataItem0,
-                    new byte[negativeLength]));
-        }
-
-        // ------------------------------------------------------------------
-        // TRANSLATE MESSAGE TESTS (Decoding coverage)
-        // ------------------------------------------------------------------
-
-        [Test]
-        public void TranslateMessage_ShouldDecodeControlItemCorrectly()
-        {
-            // Arrange: Create a test message with ControlItemCode
-            var type = NetSdrMessageHelper.MsgTypes.SetControlItem;
-            var code = NetSdrMessageHelper.ControlItemCodes.IQOutputDataSampleRate;
-            byte[] parameters = { 0xAA, 0xBB };
-            byte[] msg = NetSdrMessageHelper.GetControlItemMessage(type, code, parameters);
-
-            // Act
-            bool success = NetSdrMessageHelper.TranslateMessage(msg, out var actualType, out var actualCode, out var sequenceNumber, out var body);
-
-            // Assert
-            Assert.That(success, Is.True);
-            Assert.That(actualType, Is.EqualTo(type));
-            Assert.That(actualCode, Is.EqualTo(code));
-            Assert.That(body, Is.EqualTo(parameters));
-            Assert.That(sequenceNumber, Is.EqualTo(0));
-        }
-
-        // --- NEW TEST 2: Decode DataItem correctly (Fixing previous failure) ---
-        [Test]
-        public void TranslateMessage_ShouldDecodeDataItemCorrectly()
-        {
-            // Arrange: Create a test message with DataItem (DataItem0)
-            var type = NetSdrMessageHelper.MsgTypes.DataItem0;
-            // The body contains SequenceNumber (2 bytes) + actual data (3 bytes) = 5 bytes total body length
-            // NOTE: GetDataItemMessage only takes *data* as parameters, Sequence Number is extracted from the first two bytes of that data
-            ushort expectedSequenceNumber = 0xABCD;
-            byte[] dataPayload = { 0xAA, 0xBB, 0xCC };
-
-            // Combine SequenceNumber (2 bytes) and Payload (3 bytes) into the parameters for GetMessage
-            byte[] parameters = BitConverter.GetBytes(expectedSequenceNumber).Concat(dataPayload).ToArray();
-
-            byte[] msg = NetSdrMessageHelper.GetDataItemMessage(type, parameters);
-
-            // Act
-            bool success = NetSdrMessageHelper.TranslateMessage(msg, out var actualType, out var actualCode, out var sequenceNumber, out var body);
-
-            // Assert
-            Assert.That(success, Is.True);
-            Assert.That(actualType, Is.EqualTo(type));
-            Assert.That(actualCode, Is.EqualTo(NetSdrMessageHelper.ControlItemCodes.None));
-            Assert.That(sequenceNumber, Is.EqualTo(expectedSequenceNumber));
-
-            // The decoded body should only contain the dataPayload (3 bytes)
-            Assert.That(body, Is.EqualTo(dataPayload));
-            Assert.That(body.Length, Is.EqualTo(dataPayload.Length));
-        }
-
-        // --- NEW TEST 3: Decode DataItem edge case (Length 0 in header) ---
-        [Test]
-        public void TranslateMessage_ShouldDecodeDataItemEdgeCaseCorrectly()
-        {
-            // Arrange: Max length message for DataItem
-            var type = NetSdrMessageHelper.MsgTypes.DataItem0;
-            ushort expectedSequenceNumber = 0x1234;
-
-            // Parameters = Sequence Number (2 bytes) + 8192 bytes of data (8194 total body length)
-            byte[] dataPayload = new byte[8192];
-            byte[] parameters = BitConverter.GetBytes(expectedSequenceNumber).Concat(dataPayload).ToArray();
-
-            // The header will be constructed with length 0, but total message length is 8194
-            byte[] msg = NetSdrMessageHelper.GetDataItemMessage(type, parameters);
-
-            // Act
-            bool success = NetSdrMessageHelper.TranslateMessage(msg, out var actualType, out var actualCode, out var sequenceNumber, out var body);
-
-            // Assert
-            Assert.That(success, Is.True);
-            Assert.That(actualType, Is.EqualTo(type));
-            Assert.That(sequenceNumber, Is.EqualTo(expectedSequenceNumber));
-            Assert.That(body.Length, Is.EqualTo(dataPayload.Length)); // Body is the large payload
-            Assert.That(msg.Length, Is.EqualTo(8194));
-        }
-
-        [Test]
-        public void TranslateMessage_ShouldFailOnInvalidBodyLength()
-        {
-            // Arrange: Create a correct header but truncate 1 byte from the body
-            byte[] parameters = { 0xAA, 0xBB };
-            byte[] correctMsg = NetSdrMessageHelper.GetControlItemMessage(NetSdrMessageHelper.MsgTypes.Ack, NetSdrMessageHelper.ControlItemCodes.None, parameters);
-            byte[] corruptedMsg = correctMsg.Take(correctMsg.Length - 1).ToArray();
-
-            // Act
-            bool success = NetSdrMessageHelper.TranslateMessage(corruptedMsg, out var actualType, out var actualCode, out var sequenceNumber, out var body);
-
-            // Assert: Should return false due to length mismatch
-            Assert.That(success, Is.False);
-        }
-
-        [Test]
-        public void TranslateMessage_ShouldFailOnInvalidControlItemCode()
-        {
-            // Arrange: Generate a Control message type but insert a non-existent code (0xFFFF)
-            var type = NetSdrMessageHelper.MsgTypes.SetControlItem;
-            // Total length: Header (2) + Invalid Code (2) + Parameters (2) = 6
-            byte[] header = BitConverter.GetBytes((ushort)((int)type << 13 | (6)));
-            byte[] invalidCode = BitConverter.GetBytes((ushort)0xFFFF); // Code not defined in Enum
-            byte[] msg = header.Concat(invalidCode).Concat(new byte[2]).ToArray();
-
-            // Act
-            bool success = NetSdrMessageHelper.TranslateMessage(msg, out var actualType, out var actualCode, out var sequenceNumber, out var body);
-
-            // Assert: Should return false because the code is not defined
-            Assert.That(success, Is.False);
-        }
-
-        // --- NEW TEST 4: Fail on message shorter than header ---
-        [Test]
-        public void TranslateMessage_ShouldFailOnMessageShorterThanHeader()
-        {
-            // Arrange: Only 1 byte is provided (min header is 2 bytes)
-            byte[] shortMsg = { 0x01 };
-
-            // Act
-            bool success = NetSdrMessageHelper.TranslateMessage(shortMsg, out var actualType, out var actualCode, out var sequenceNumber, out var body);
-
-            // Assert
-            Assert.That(success, Is.False);
-        }
-
-        // --- NEW TEST 5: Fail on Control message body shorter than Control Item Code ---
-        [Test]
-        public void TranslateMessage_ShouldFailOnControlBodyTooShort()
-        {
-            // Arrange: Control item type, but body length is 1 byte (requires 2 for code)
-            var type = NetSdrMessageHelper.MsgTypes.SetControlItem;
-            byte[] header = BitConverter.GetBytes((ushort)((int)type << 13 | (2 + 1))); // Total message length 3 (header + 1 byte body)
-            byte[] msg = header.Concat(new byte[] { 0xAA }).ToArray();
-
-            // Act
-            bool success = NetSdrMessageHelper.TranslateMessage(msg, out var actualType, out var actualCode, out var sequenceNumber, out var body);
-
-            // Assert: Should fail because remainingLength < _msgControlItemLength
-            Assert.That(success, Is.False);
-        }
-
-        // --- NEW TEST 6: Fail on Data Item message body shorter than Sequence Number ---
-        [Test]
-        public void TranslateMessage_ShouldFailOnDataBodyTooShort()
-        {
-            // Arrange: Data item type, but body length is 1 byte (requires 2 for sequence number)
-            var type = NetSdrMessageHelper.MsgTypes.DataItem0;
-            byte[] header = BitConverter.GetBytes((ushort)((int)type << 13 | (2 + 1))); // Total message length 3 (header + 1 byte body)
-            byte[] msg = header.Concat(new byte[] { 0xAA }).ToArray();
-
-            // Act
-            bool success = NetSdrMessageHelper.TranslateMessage(msg, out var actualType, out var actualCode, out var sequenceNumber, out var body);
-
-            // Assert: Should fail because remainingLength < _msgSequenceNumberLength
-            Assert.That(success, Is.False);
-        }
-
-
-        // ------------------------------------------------------------------
-        // GET SAMPLES TESTS
-        // ------------------------------------------------------------------
-
-        [Test]
-        public void GetSamples_ShouldReturnExpectedIntegers_16Bit()
-        {
-            //Arrange
-            ushort sampleSize = 16; // 2 bytes per sample
-            byte[] body = { 0x01, 0x00, 0x02, 0x00 }; // 2 samples: 1, 2
-
-            //Act
-            var samples = NetSdrMessageHelper.GetSamples(sampleSize, body).ToArray();
-
-            //Assert
-            Assert.That(samples.Length, Is.EqualTo(2));
-            Assert.That(samples[0], Is.EqualTo(1));
-            Assert.That(samples[1], Is.EqualTo(2));
-        }
-
-        [Test]
-        public void GetSamples_ShouldHandle32BitSamples()
-        {
-            // Arrange: Testing 32-bit samples (4 bytes)
-            us hort sampleSize = 32;
-            byte[] body = { 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00 };
-
-            // Act
-            var samples = NetSdrMessageHelper.GetSamples(sampleSize, body).ToArray();
-
-            // Assert
-            Assert.That(samples.Length, Is.EqualTo(2));
-            Assert.That(samples[0], Is.EqualTo(1));
-            Assert.That(samples[1], Is.EqualTo(2));
-        }
-
-        [Test]
-        public void GetSamples_ShouldThrowOnTooLargeSampleSize()
-        {
-            // Assert: sampleSize > 32 bits
-            ushort sampleSize = 40;
-
-            Assert.Throws<ArgumentOutOfRangeException>(() =>
-                NetSdrMessageHelper.GetSamples(sampleSize, Array.Empty<byte>()).ToArray());
-        }
-
-        [Test]
-        public void GetSamples_ShouldHandleIncompleteBody()
-        {
-            // Assert: Body is not a multiple of the sample size (16 bits = 2 bytes, body has 1 byte)
-            ushort sampleSize = 16;
-            byte[] body = { 0x01 };
-
-            // Act
-            var samples = NetSdrMessageHelper.GetSamples(sampleSize, body).ToArray();
-
-            // Assert: Should return an empty array
-            Assert.That(samples.Length, Is.EqualTo(0));
-        }
-
-        // --- NEW TEST 7: Throw exception when sampleSize is zero or not multiple of 8 ---
-        [Test]
-        public void GetSamples_ShouldThrowOnInvalidSampleSize()
-        {
-            // Arrange: size 0
-            ushort sizeZero = 0;
-            // Arrange: size not multiple of 8
-            ushort sizeNotMultipleOf8 = 10;
-
-            // Assert
-            Assert.Throws<ArgumentOutOfRangeException>(() =>
-                NetSdrMessageHelper.GetSamples(sizeZero, Array.Empty<byte>()).ToArray());
-
-            Assert.Throws<ArgumentOutOfRangeException>(() =>
-                NetSdrMessageHelper.GetSamples(sizeNotMultipleOf8, Array.Empty<byte>()).ToArray());
-        }
-
-        // --- NEW TEST 8: Handle empty body ---
-        [Test]
-        public void GetSamples_ShouldHandleEmptyBody()
+        public async Task StartListeningAsync_ShouldStopListeningOnCancellation()
         {
             // Arrange
-            ushort sampleSize = 16;
-            byte[] emptyBody = Array.Empty<byte>();
+            var listeningTask = _wrapper.StartListeningAsync();
 
-            // Act
-            var samples = NetSdrMessageHelper.GetSamples(sampleSize, emptyBody).ToArray();
+            // Allow a small delay for UdpClient to initialize
+            await Task.Delay(100);
+
+            // Act: Stop listening which cancels the CTS and breaks the ReceiveAsync loop
+            _wrapper.StopListening();
 
             // Assert
-            Assert.That(samples, Is.Empty);
+            // 1. Task should complete within a short time (OperationCanceledException is expected internally)
+            Assert.That(async () => await listeningTask.WaitAsync(TimeSpan.FromSeconds(1)), Throws.Nothing,
+                "Listening task should complete gracefully (no exceptions thrown outside) on StopListening.");
+
+            // 2. Verify that UdpClient is null after cleanup
+            Assert.That(GetPrivateField<UdpClient>("_udpClient"), Is.Null, "UdpClient should be nullified after cancellation.");
+        }
+
+        [Test]
+        public async Task StartListeningAsync_ShouldHandleStartWhenAlreadyRunning()
+        {
+            // Arrange: Setup private CTS to simulate "already running"
+            var cts = new CancellationTokenSource();
+            SetPrivateField("_cts", cts);
+
+            // Act
+            var task = _wrapper.StartListeningAsync(); // Should exit early because CTS is not cancelled
+
+            // Assert: The task should complete instantly (or near-instantly)
+            Assert.That(cts.IsCancellationRequested, Is.False, "Existing CTS should not be cancelled if StartListening exits early.");
+
+            // Clean up for TearDown
+            cts.Dispose();
         }
     }
 }
