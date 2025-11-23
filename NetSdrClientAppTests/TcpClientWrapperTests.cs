@@ -219,10 +219,11 @@ namespace NetSdrClientAppTests.Networking
                     It.IsAny<int>(),
                     It.IsAny<int>(),
                     It.IsAny<CancellationToken>()))
-                // FIX CS0308: Use ReturnsAsync(int) instead of Returns(Task<int>) for SetupSequence
+                // Use ReturnsAsync(int) for the first call (EOF)
                 .ReturnsAsync(0)
-                // Subsequent calls should not happen if logic is correct, but safe fallback
-                .Returns<byte[], int, int, CancellationToken>((buffer, offset, size, token) =>
+                // Subsequent calls must return a Task<int> via a function returning Task.
+                // FIX CS0308: Remove type arguments from Returns
+                .Returns((byte[] buffer, int offset, int size, CancellationToken token) =>
                 {
                     var tcs = new TaskCompletionSource<int>();
                     token.Register(() => tcs.TrySetCanceled());
