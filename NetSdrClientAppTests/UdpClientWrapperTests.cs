@@ -7,17 +7,18 @@ using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Linq;
-// FIX: Add using directive to resolve CS0246 errors for IHashAlgorithm and UdpClientWrapper
 using NetSdrClientApp.Networking;
+using System.Net.Sockets; // Required for UdpClient and related types
+using System.Reflection; // Required for mocking internal UdpClient field
 
 namespace NetSdrClientAppTests.Networking
 {
-    // FIX: Changed namespace back to NetSdrClientAppTests.Networking based on the error output context.
     [TestFixture]
     public class UdpClientWrapperTests
     {
         private Mock<IHashAlgorithm> _hashMock = null!;
-        // Non-nullable field requires initialization in SetUp or constructor, and disposal in TearDown
+        // Mock of the internal UdpClient to test Cleanup/Dispose logic
+        private Mock<UdpClient>? _udpClientMock;
         private UdpClientWrapper _wrapper = null!;
         private const int TestPort = 55555;
 
@@ -26,94 +27,150 @@ namespace NetSdrClientAppTests.Networking
         {
             _hashMock = new Mock<IHashAlgorithm>();
             _wrapper = new UdpClientWrapper(TestPort, _hashMock.Object);
+            _udpClientMock = null; // Ensure it's null before tests that don't need it
         }
 
-        // FIX NUnit1032: Dispose the IDisposable field (_wrapper) after each test run.
         [TearDown]
         public void TearDown()
         {
             _wrapper?.Dispose();
+            // Dispose of the mock if it was created
+            _udpClientMock?.VerifyAll();
         }
 
 
         // ------------------------------------------------------------------
-        // TEST 1: CONSTRUCTOR (Constructor coverage)
+        // TEST 1: CONSTRUCTOR (Coverage: Constructor)
         // ------------------------------------------------------------------
         [Test]
         public void Constructor_ShouldInitializeCorrectly()
         {
             // Assert
-            // Check that the object is created and hashAlgorithm is injected
             Assert.That(_wrapper, Is.Not.Null);
         }
 
         // ------------------------------------------------------------------
-        // TEST 2: GET HASH CODE (Hashing logic coverage)
+        // TEST 2: GET HASH CODE (Coverage: GetHashCode method)
         // ------------------------------------------------------------------
         [Test]
-        public void GetHashCode_ShouldCallComputeHashAndReturnInt()
+        public void GetHashCode_ShouldReturnConsistentHash()
         {
             // Arrange
-            byte[] fakeHash = new byte[4] { 0x01, 0x02, 0x03, 0x04 }; // 4 bytes = int32
+            var wrapper2 = new UdpClientWrapper(TestPort, _hashMock.Object); // Same port/address
 
             // Act
-            int hashCode = _wrapper.GetHashCode();
+            int hashCode1 = _wrapper.GetHashCode();
+            int hashCode2 = wrapper2.GetHashCode();
 
             // Assert
-            // Verify that ComputeHash method was NOT called (UdpClientWrapper uses HashCode.Combine now)
-            _hashMock.Verify(h => h.ComputeHash(It.IsAny<byte[]>()), Times.Never);
-
-            // Verify that the hash code is generated 
-            Assert.That(hashCode, Is.Not.EqualTo(0));
+            // HashCode for IPEndPoint(IPAddress.Any, port) must be consistent
+            Assert.That(hashCode1, Is.EqualTo(hashCode2));
+            Assert.That(hashCode1, Is.Not.EqualTo(0), "Hash code should not be default 0.");
         }
 
         // ------------------------------------------------------------------
-        // TEST 3: STOP LISTENING (Cleanup methods coverage)
+        // TEST 3: STOP LISTENING/CLEANUP LOGIC (Coverage: StopListening, Exit, Cleanup)
         // ------------------------------------------------------------------
 
         [Test]
-        public void StopListening_ShouldCallCleanup()
+        public void StopListening_ShouldCancelTokenAndCloseUdpClient()
         {
+            // Arrange: We need to set up the internal _udpClient and _cts fields manually for testing Cleanup logic
+            _udpClientMock = new Mock<UdpClient>(SocketType.Dgram); // Mock UdpClient
+            var cts = new CancellationTokenSource();
+
+            // Use reflection to set private fields, as UdpClientWrapper is not designed for easy mocking.
+            // WARNING: This is a hack due to UdpClientWrapper's structure.
+            var wrapperType = typeof(UdpClientWrapper);
+            wrapperType.GetField("_cts", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(_wrapper, cts);
+            wrapperType.GetField("_udpClient", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(_wrapper, _udpClientMock.Object);
+
+            // Set up expectations
+            _udpClientMock.Setup(c => c.Close()).Verifiable();
+            _udpClientMock.Setup(c => c.Dispose()).Verifiable();
+
             // Act
             _wrapper.StopListening();
 
-            // Assert: Ensure the method did not throw an exception (testing happy path Cleanup)
-            Assert.Pass();
+            // Assert
+            // 1. Verify that the cancellation was requested
+            Assert.That(cts.IsCancellationRequested, Is.True, "Cancellation token should be cancelled.");
+
+            // 2. Verify that the UdpClient was closed and disposed
+            _udpClientMock.Verify(c => c.Close(), Times.Once);
+            _udpClientMock.Verify(c => c.Dispose(), Times.Once);
         }
 
         [Test]
-        public void Exit_ShouldCallCleanup()
+        public void Exit_ShouldCancelTokenAndCloseUdpClient()
         {
+            // This test reuses the same logic as StopListening, ensuring 'Exit' calls 'Cleanup'.
+            // Arrange
+            _udpClientMock = new Mock<UdpClient>(SocketType.Dgram);
+            var cts = new CancellationTokenSource();
+
+            var wrapperType = typeof(UdpClientWrapper);
+            wrapperType.GetField("_cts", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(_wrapper, cts);
+            wrapperType.GetField("_udpClient", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(_wrapper, _udpClientMock.Object);
+
+            _udpClientMock.Setup(c => c.Close()).Verifiable();
+            _udpClientMock.Setup(c => c.Dispose()).Verifiable();
+
             // Act
             _wrapper.Exit();
 
-            // Assert: Ensure the method did not throw an exception
-            Assert.Pass();
+            // Assert
+            Assert.That(cts.IsCancellationRequested, Is.True);
+            _udpClientMock.Verify(c => c.Close(), Times.Once);
+            _udpClientMock.Verify(c => c.Dispose(), Times.Once);
         }
 
         // ------------------------------------------------------------------
-        // TEST 4: DISPOSE (Dispose coverage)
+        // TEST 4: DISPOSE (Coverage: Dispose(bool), IDisposable implementation)
         // ------------------------------------------------------------------
 
         [Test]
-        public void Dispose_ShouldStopSendingAndDisposeHash()
+        public void Dispose_ShouldStopSendingDisposeHashAndMarkAsDisposed()
         {
+            // Arrange
+            // We need to set up internal _cts field for cleanup during dispose
+            var cts = new CancellationTokenSource();
+            typeof(UdpClientWrapper).GetField("_cts", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(_wrapper, cts);
+
             // Act
             _wrapper.Dispose();
 
             // Assert: Verify that Dispose was called for the injected object
-            _hashMock.Verify(h => h.Dispose(), Times.Once);
+            _hashMock.Verify(h => h.Dispose(), Times.Once, "IHashAlgorithm should be disposed.");
+
+            // Verify that CTS was disposed
+            Assert.That(cts.IsCancellationRequested, Is.True, "Dispose should call Cleanup, which cancels CTS.");
+
+            // Try disposing again (should do nothing)
+            _wrapper.Dispose();
+            _hashMock.Verify(h => h.Dispose(), Times.Once, "Dispose should be idempotent.");
         }
 
         // ------------------------------------------------------------------
-        // TEST 5: START LISTENING (Exception-throwing code coverage)
+        // TEST 5: START LISTENING (Placeholder logic improvement)
         // ------------------------------------------------------------------
 
         [Test]
-        public void StartListeningAsync_ShouldHandleExceptionInStartup()
+        public void StartListeningAsync_ShouldHandleStartWhenAlreadyRunning()
         {
-            // Note: This test is a placeholder and should pass without testing asynchronous logic.
-            Assert.Pass("StartListeningAsync cannot be unit-tested without refactoring UdpClient creation.");
+            // Arrange: Setup private CTS to simulate "already running"
+            var cts = new CancellationTokenSource();
+            typeof(UdpClientWrapper).GetField("_cts", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(_wrapper, cts);
+
+            // Act
+            var task = _wrapper.StartListeningAsync(); // Should exit early because CTS is not cancelled
+
+            // Assert: The task should complete instantly or not throw, and the existing CTS should remain un-disposed
+            Assert.That(task.IsCompleted, Is.True);
+            Assert.That(cts.IsCancellationRequested, Is.False);
+
+            // Clean up for TearDown
+            cts.Dispose();
         }
     }
 }
