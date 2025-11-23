@@ -9,17 +9,15 @@ using System.Collections.Concurrent;
 
 namespace NetSdrClientApp.Networking
 {
-    // Інтерфейс для абстрагування алгоритму хешування
+    // Interface for hash algorithm abstraction
     public interface IHashAlgorithm : IDisposable
     {
         byte[] ComputeHash(byte[] buffer);
     }
 
-    // FIX 1: Заміна слабкого MD5 на SHA256
-    // FIX 3: Перейменування класу відповідно до нового алгоритму
+    // Replacement for weak MD5 with SHA256
     public class Sha256Adapter : IHashAlgorithm
     {
-        // Використовуємо SHA256 замість MD5
         private readonly HashAlgorithm _sha256 = SHA256.Create();
 
         public byte[] ComputeHash(byte[] buffer) => _sha256.ComputeHash(buffer);
@@ -32,7 +30,8 @@ namespace NetSdrClientApp.Networking
 
     // --------------------------------------------------------------------------------
 
-    public interface IUdpClient : IDisposable // Додаємо IDisposable, якщо він відсутній
+    // Interface for the UDP client wrapper
+    public interface IUdpClient : IDisposable
     {
         Task StartListeningAsync();
         void StopListening();
@@ -40,9 +39,8 @@ namespace NetSdrClientApp.Networking
         event EventHandler<byte[]>? MessageReceived;
     }
 
-    // FIX 3: Додано клас до простору імен
-    // FIX 2: Реалізовано IDisposable для коректної утилізації ресурсів
-    public class UdpClientWrapper : IUdpClient, IDisposable
+    // UdpClientWrapper implementation
+    public class UdpClientWrapper : IUdpClient
     {
         private readonly IPEndPoint _localEndPoint;
         private readonly IHashAlgorithm _hashAlgorithm;
@@ -54,7 +52,6 @@ namespace NetSdrClientApp.Networking
         public event EventHandler<byte[]>? MessageReceived;
 
         public UdpClientWrapper(int port)
-            // FIX: Змінено конструктор за замовчуванням на використання SHA256
             : this(port, new Sha256Adapter())
         {
         }
@@ -67,11 +64,9 @@ namespace NetSdrClientApp.Networking
 
         public async Task StartListeningAsync()
         {
-            // FIX: Перевіряємо, чи вже запущено або утилізовано
             if (_cts != null && !_cts.IsCancellationRequested) return;
             if (_disposed) return;
 
-            // Замінюємо старий CTS, якщо він був
             _cts?.Dispose();
             _cts = new CancellationTokenSource();
 
@@ -79,15 +74,12 @@ namespace NetSdrClientApp.Networking
 
             try
             {
-                // Створюємо клієнт тут, щоб його можна було закрити в Cleanup
                 _udpClient = new UdpClient(_localEndPoint);
 
-                // Використовуємо CancellationToken у циклі
                 CancellationToken token = _cts.Token;
 
                 while (!token.IsCancellationRequested)
                 {
-                    // FIX: Використовуємо ReceiveAsync з токеном
                     UdpReceiveResult result = await _udpClient.ReceiveAsync(token);
                     MessageReceived?.Invoke(this, result.Buffer);
 
@@ -96,7 +88,7 @@ namespace NetSdrClientApp.Networking
             }
             catch (OperationCanceledException)
             {
-                // Очікуваний виняток при скасуванні
+                // Expected exception on cancellation
             }
             catch (Exception ex)
             {
@@ -118,14 +110,13 @@ namespace NetSdrClientApp.Networking
 
             try
             {
-                // 1. Скасовуємо токен, щоб зупинити цикл ReceiveAsync
+                // 1. Cancel the token to stop the ReceiveAsync loop
                 _cts?.Cancel();
 
-                // 2. Закриваємо UDP клієнт
+                // 2. Close and dispose the UDP client
                 if (_udpClient != null)
                 {
                     _udpClient.Close();
-                    // Додатково утилізуємо, якщо можливо (UdpClient реалізує IDisposable)
                     _udpClient.Dispose();
                     _udpClient = null;
                 }
@@ -138,15 +129,14 @@ namespace NetSdrClientApp.Networking
             }
         }
 
-        // FIX 4: Видалення криптографічного хешування з GetHashCode
-        // Використовуємо стандартну логіку для GetHashCode.
+        // Use standard logic for GetHashCode.
         public override int GetHashCode()
         {
-            // Генеруємо хеш-код на основі незмінних полів (порт і адреса)
+            // Generate hash code based on immutable fields (port and address)
             return HashCode.Combine(_localEndPoint.Address, _localEndPoint.Port);
         }
 
-        // FIX 2: Реалізація IDisposable за стандартним шаблоном
+        // Implementation of IDisposable standard pattern
         public void Dispose()
         {
             Dispose(true);
@@ -159,10 +149,10 @@ namespace NetSdrClientApp.Networking
             {
                 if (disposing)
                 {
-                    // Зупиняємо слухача та очищуємо UdpClient
+                    // Stop listener and clean up UdpClient
                     Cleanup("Disposing UdpClientWrapper.");
 
-                    // Утилізуємо IHashAlgorithm (MD5/SHA256) та CTS
+                    // Dispose IHashAlgorithm (SHA256) and CTS
                     _hashAlgorithm.Dispose();
                     _cts?.Dispose();
                 }
