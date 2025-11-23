@@ -6,17 +6,40 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
+public interface IHashAlgorithm : IDisposable
+{
+    byte[] ComputeHash(byte[] buffer);
+}
+
+public class Md5Adapter : IHashAlgorithm
+{
+    private readonly MD5 _md5 = MD5.Create();
+    public byte[] ComputeHash(byte[] buffer) => _md5.ComputeHash(buffer);
+    public void Dispose() => _md5.Dispose();
+}
+
+// --------------------------------------------------------------------------------
+
 public class UdpClientWrapper : IUdpClient
 {
     private readonly IPEndPoint _localEndPoint;
-    private CancellationTokenSource? _cts;
+    private readonly IHashAlgorithm _hashAlgorithm;
+
     private UdpClient? _udpClient;
+
+    private CancellationTokenSource? _cts;
 
     public event EventHandler<byte[]>? MessageReceived;
 
     public UdpClientWrapper(int port)
+        : this(port, new Md5Adapter())
+    {
+    }
+
+    public UdpClientWrapper(int port, IHashAlgorithm hashAlgorithm)
     {
         _localEndPoint = new IPEndPoint(IPAddress.Any, port);
+        _hashAlgorithm = hashAlgorithm;
     }
 
     public async Task StartListeningAsync()
@@ -35,7 +58,7 @@ public class UdpClientWrapper : IUdpClient
                 Console.WriteLine($"Received from {result.RemoteEndPoint}");
             }
         }
-        catch (OperationCanceledException ex)
+        catch (OperationCanceledException)
         {
             //empty
         }
@@ -44,6 +67,7 @@ public class UdpClientWrapper : IUdpClient
             Console.WriteLine($"Error receiving message: {ex.Message}");
         }
     }
+
     public void StopListening() => Cleanup("Stopped listening for UDP messages.");
 
     public void Exit() => Cleanup("Stopped listening for UDP messages.");
@@ -66,9 +90,14 @@ public class UdpClientWrapper : IUdpClient
     {
         var payload = $"{nameof(UdpClientWrapper)}|{_localEndPoint.Address}|{_localEndPoint.Port}";
 
-        using var md5 = MD5.Create();
-        var hash = md5.ComputeHash(Encoding.UTF8.GetBytes(payload));
+        var hash = _hashAlgorithm.ComputeHash(Encoding.UTF8.GetBytes(payload));
 
         return BitConverter.ToInt32(hash, 0);
+    }
+
+    public void Dispose()
+    {
+        Cleanup("Disposing UdpClientWrapper.");
+        _hashAlgorithm.Dispose();
     }
 }

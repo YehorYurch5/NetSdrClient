@@ -1,31 +1,80 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.IO;
 using System.Linq;
-using System.Net.Http;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
+// Припускаємо, що ITcpClient, ISystemTcpClient, INetworkStream вже оголошені
+// в інших файлах, таких як ITcpClient.cs та INetworkStream.cs
+
 namespace NetSdrClientApp.Networking
 {
+    // Адаптер для реального TcpClient (може залишатися тут або бути перенесеним)
+    public class SystemTcpClientAdapter : ISystemTcpClient
+    {
+        private readonly TcpClient _client;
+
+        public SystemTcpClientAdapter(TcpClient client) => _client = client;
+        public bool Connected => _client.Connected;
+        public void Close() => _client.Close();
+        public void Connect(string host, int port) => _client.Connect(host, port);
+        public void Dispose() => _client.Dispose();
+
+        // Повертаємо адаптер для NetworkStream
+        public INetworkStream GetStream() => new NetworkStreamAdapter(_client.GetStream());
+    }
+
+    // Адаптер для NetworkStream (може залишатися тут або бути перенесеним)
+    public class NetworkStreamAdapter : INetworkStream
+    {
+        private readonly NetworkStream _stream;
+
+        public NetworkStreamAdapter(NetworkStream stream) => _stream = stream;
+
+        public bool CanRead => _stream.CanRead;
+        public bool CanWrite => _stream.CanWrite;
+        public void Close() => _stream.Close();
+        public void Dispose() => _stream.Dispose();
+
+        public Task<int> ReadAsync(byte[] buffer, int offset, int size, CancellationToken cancellationToken)
+            => _stream.ReadAsync(buffer, offset, size, cancellationToken);
+
+        public Task WriteAsync(byte[] buffer, int offset, int size, CancellationToken cancellationToken)
+            => _stream.WriteAsync(buffer, offset, size, cancellationToken);
+    }
+
+    // -------------------------------------------------------------
+
+    // Основний клас. Тепер використовує зовнішні інтерфейси
     public class TcpClientWrapper : ITcpClient
     {
-        private string _host;
-        private int _port;
-        private TcpClient? _tcpClient;
-        private NetworkStream? _stream;
+        private readonly string _host;
+        private readonly int _port;
+
+        // 🎯 Використовуємо ISystemTcpClient (визначений десь окремо)
+        private ISystemTcpClient? _tcpClient;
+        private INetworkStream? _stream;
         private CancellationTokenSource _cts;
 
         public bool Connected => _tcpClient != null && _tcpClient.Connected && _stream != null;
 
         public event EventHandler<byte[]>? MessageReceived;
 
+        // Фабрика для створення реальних клієнтів
+        private readonly Func<ISystemTcpClient> _clientFactory;
+
+        // Конструктор для Production-коду
         public TcpClientWrapper(string host, int port)
+            : this(host, port, () => new SystemTcpClientAdapter(new TcpClient())) { }
+
+        // Конструктор для DI та тестування
+        public TcpClientWrapper(string host, int port, Func<ISystemTcpClient> clientFactory)
         {
             _host = host;
             _port = port;
+            _clientFactory = clientFactory;
+            _cts = new CancellationTokenSource();
         }
 
         public void Connect()
@@ -36,7 +85,7 @@ namespace NetSdrClientApp.Networking
                 return;
             }
 
-            _tcpClient = new TcpClient();
+            _tcpClient = _clientFactory();
 
             try
             {
@@ -60,7 +109,7 @@ namespace NetSdrClientApp.Networking
                 _stream?.Close();
                 _tcpClient?.Close();
 
-                _cts = null;
+                _cts = null!;
                 _tcpClient = null;
                 _stream = null;
                 Console.WriteLine("Disconnected.");
@@ -76,7 +125,7 @@ namespace NetSdrClientApp.Networking
             if (Connected && _stream != null && _stream.CanWrite)
             {
                 Console.WriteLine($"Message sent: " + data.Select(b => Convert.ToString(b, toBase: 16)).Aggregate((l, r) => $"{l} {r}"));
-                await _stream.WriteAsync(data, 0, data.Length);
+                await _stream.WriteAsync(data, 0, data.Length, _cts.Token);
             }
             else
             {
@@ -90,7 +139,7 @@ namespace NetSdrClientApp.Networking
             if (Connected && _stream != null && _stream.CanWrite)
             {
                 Console.WriteLine($"Message sent: " + data.Select(b => Convert.ToString(b, toBase: 16)).Aggregate((l, r) => $"{l} {r}"));
-                await _stream.WriteAsync(data, 0, data.Length);
+                await _stream.WriteAsync(data, 0, data.Length, _cts.Token);
             }
             else
             {
@@ -100,24 +149,32 @@ namespace NetSdrClientApp.Networking
 
         private async Task StartListeningAsync()
         {
+            var token = _cts!.Token;
+
             if (Connected && _stream != null && _stream.CanRead)
             {
                 try
                 {
                     Console.WriteLine($"Starting listening for incomming messages.");
 
-                    while (!_cts.Token.IsCancellationRequested)
+                    while (!token.IsCancellationRequested)
                     {
                         byte[] buffer = new byte[8194];
 
-                        int bytesRead = await _stream.ReadAsync(buffer, 0, buffer.Length, _cts.Token);
+                        int bytesRead = await _stream.ReadAsync(buffer, 0, buffer.Length, token);
+
+                        if (bytesRead == 0)
+                        {
+                            break;
+                        }
+
                         if (bytesRead > 0)
                         {
                             MessageReceived?.Invoke(this, buffer.AsSpan(0, bytesRead).ToArray());
                         }
                     }
                 }
-                catch (OperationCanceledException ex)
+                catch (OperationCanceledException)
                 {
                     //empty
                 }
@@ -128,6 +185,7 @@ namespace NetSdrClientApp.Networking
                 finally
                 {
                     Console.WriteLine("Listener stopped.");
+                    Disconnect();
                 }
             }
             else
@@ -136,5 +194,4 @@ namespace NetSdrClientApp.Networking
             }
         }
     }
-
 }
