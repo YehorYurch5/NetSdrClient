@@ -220,15 +220,8 @@ namespace NetSdrClientAppTests.Networking
                     It.IsAny<int>(),
                     It.IsAny<CancellationToken>()))
                 // Use ReturnsAsync(int) for the first call (EOF)
-                .ReturnsAsync(0)
-                // Subsequent calls must return a Task<int> via a function returning Task.
-                // FIX CS0308: Remove type arguments from Returns
-                .Returns((byte[] buffer, int offset, int size, CancellationToken token) =>
-                {
-                    var tcs = new TaskCompletionSource<int>();
-                    token.Register(() => tcs.TrySetCanceled());
-                    return tcs.Task;
-                });
+                .ReturnsAsync(0);
+            // Removed the second, problematic Returns call (lines 226-231 in previous version)
 
             // Act
             // We wait for the ReadAsync(0) to complete and trigger the Disconnect call in the finally block.
