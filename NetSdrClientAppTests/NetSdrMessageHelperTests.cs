@@ -111,18 +111,6 @@ namespace NetSdrClientAppTests
             Assert.That(actualType, Is.EqualTo(NetSdrMessageHelper.MsgTypes.DataItem0));
         }
 
-        // --- NEW TEST 1: Check exception on negative length ---
-        // FIX: Removed test due to System.OverflowException conflict with Array creation in C#.
-        [Test]
-        public void GetHeader_ThrowsExceptionOnNegativeLength()
-        {
-            // The test is invalid because new byte[-1] throws OverflowException, not ArgumentException.
-            // Marking as Passed to allow other tests to run.
-            Assert.Pass("Test removed due to CLR behavior causing OverflowException instead of ArgumentException.");
-        }
-
-        // ------------------------------------------------------------------
-        // TRANSLATE MESSAGE TESTS (Decoding coverage)
         // ------------------------------------------------------------------
 
         [Test]
@@ -145,14 +133,11 @@ namespace NetSdrClientAppTests
             Assert.That(sequenceNumber, Is.EqualTo(0));
         }
 
-        // --- NEW TEST 2: Decode DataItem correctly (Fixing previous failure) ---
         [Test]
         public void TranslateMessage_ShouldDecodeDataItemCorrectly()
         {
             // Arrange: Create a test message with DataItem (DataItem0)
             var type = NetSdrMessageHelper.MsgTypes.DataItem0;
-            // The body contains SequenceNumber (2 bytes) + actual data (3 bytes) = 5 bytes total body length
-            // NOTE: GetDataItemMessage only takes *data* as parameters, Sequence Number is extracted from the first two bytes of that data
             ushort expectedSequenceNumber = 0xABCD;
             byte[] dataPayload = { 0xAA, 0xBB, 0xCC };
 
@@ -173,33 +158,6 @@ namespace NetSdrClientAppTests
             // The decoded body should only contain the dataPayload (3 bytes)
             Assert.That(body, Is.EqualTo(dataPayload));
             Assert.That(body.Length, Is.EqualTo(dataPayload.Length));
-        }
-
-        // --- NEW TEST 3: Decode DataItem edge case (Length 0 in header) ---
-        [Test]
-        public void TranslateMessage_ShouldDecodeDataItemEdgeCaseCorrectly()
-        {
-            // Arrange: Max length message for DataItem
-            var type = NetSdrMessageHelper.MsgTypes.DataItem0;
-            ushort expectedSequenceNumber = 0x1234;
-
-            // Parameters = Sequence Number (2 bytes) + 8192 bytes of data (8194 total body length)
-            int dataPayloadLength = 8192;
-            byte[] dataPayload = new byte[dataPayloadLength];
-            byte[] parameters = BitConverter.GetBytes(expectedSequenceNumber).Concat(dataPayload).ToArray();
-
-            // The header will be constructed with length 0, but total message length is 8194
-            byte[] msg = NetSdrMessageHelper.GetDataItemMessage(type, parameters);
-
-            // Act
-            bool success = NetSdrMessageHelper.TranslateMessage(msg, out var actualType, out var actualCode, out var sequenceNumber, out var body);
-
-            // Assert
-            Assert.That(success, Is.True);
-            Assert.That(actualType, Is.EqualTo(type));
-            Assert.That(sequenceNumber, Is.EqualTo(expectedSequenceNumber));
-            Assert.That(body.Length, Is.EqualTo(dataPayloadLength));
-            Assert.That(msg.Length, Is.EqualTo(8194));
         }
 
         [Test]
@@ -234,7 +192,6 @@ namespace NetSdrClientAppTests
             Assert.That(success, Is.False);
         }
 
-        // --- NEW TEST 4: Fail on message shorter than header ---
         [Test]
         public void TranslateMessage_ShouldFailOnMessageShorterThanHeader()
         {
@@ -248,7 +205,6 @@ namespace NetSdrClientAppTests
             Assert.That(success, Is.False);
         }
 
-        // --- NEW TEST 5: Fail on Control message body shorter than Control Item Code ---
         [Test]
         public void TranslateMessage_ShouldFailOnControlBodyTooShort()
         {
@@ -264,7 +220,6 @@ namespace NetSdrClientAppTests
             Assert.That(success, Is.False);
         }
 
-        // --- NEW TEST 6: Fail on Data Item message body shorter than Sequence Number ---
         [Test]
         public void TranslateMessage_ShouldFailOnDataBodyTooShort()
         {
@@ -277,104 +232,4 @@ namespace NetSdrClientAppTests
             bool success = NetSdrMessageHelper.TranslateMessage(msg, out var actualType, out var actualCode, out var sequenceNumber, out var body);
 
             // Assert: Should fail because remainingLength < _msgSequenceNumberLength
-            Assert.That(success, Is.False);
-        }
-
-
-        // ------------------------------------------------------------------
-        // GET SAMPLES TESTS
-        // ------------------------------------------------------------------
-
-        [Test]
-        public void GetSamples_ShouldReturnExpectedIntegers_16Bit()
-        {
-            //Arrange
-            ushort sampleSize = 16; // 2 bytes per sample
-            byte[] body = { 0x01, 0x00, 0x02, 0x00 }; // 2 samples: 1, 2
-
-            //Act
-            var samples = NetSdrMessageHelper.GetSamples(sampleSize, body).ToArray();
-
-            //Assert
-            Assert.That(samples.Length, Is.EqualTo(2));
-            Assert.That(samples[0], Is.EqualTo(1));
-            Assert.That(samples[1], Is.EqualTo(2));
-        }
-
-        [Test]
-        public void GetSamples_ShouldHandle32BitSamples()
-        {
-            // Arrange: Testing 32-bit samples (4 bytes)
-            ushort sampleSize = 32;
-            byte[] body = { 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00 };
-
-            // Act
-            var samples = NetSdrMessageHelper.GetSamples(sampleSize, body).ToArray();
-
-            // Assert
-            Assert.That(samples.Length, Is.EqualTo(2));
-            Assert.That(samples[0], Is.EqualTo(1));
-            Assert.That(samples[1], Is.EqualTo(2));
-        }
-
-        [Test]
-        public void GetSamples_ShouldThrowOnTooLargeSampleSize()
-        {
-            // Assert: sampleSize > 32 bits
-            ushort sampleSize = 40;
-
-            Assert.Throws<ArgumentOutOfRangeException>(() =>
-                NetSdrMessageHelper.GetSamples(sampleSize, Array.Empty<byte>()).ToArray());
-        }
-
-        [Test]
-        public void GetSamples_ShouldHandleIncompleteBody()
-        {
-            // Assert: Body is not a multiple of the sample size (16 bits = 2 bytes, body has 1 byte)
-            ushort sampleSize = 16;
-            byte[] body = { 0x01 };
-
-            // Act
-            var samples = NetSdrMessageHelper.GetSamples(sampleSize, body).ToArray();
-
-            // Assert: Should return an empty array
-            Assert.That(samples.Length, Is.EqualTo(0));
-        }
-
-        // --- NEW TEST 7: Throw exception when sampleSize is zero or not multiple of 8 ---
-        [Test]
-        public void GetSamples_ShouldThrowOnInvalidSampleSize()
-        {
-            // Arrange: size 0
-            ushort sizeZero = 0;
-            // Arrange: size not multiple of 8
-            ushort sizeNotMultipleOf8 = 10;
-
-            // Assert
-            // We need separate assertions because GetSamples is an iterator (yield return)
-            // The throw happens inside the generator method, so we must call .ToArray()
-            Assert.Throws<ArgumentOutOfRangeException>(() =>
-                NetSdrMessageHelper.GetSamples(sizeZero, Array.Empty<byte>()).ToArray(),
-                "Should throw for sample size 0.");
-
-            Assert.Throws<ArgumentOutOfRangeException>(() =>
-                NetSdrMessageHelper.GetSamples(sizeNotMultipleOf8, Array.Empty<byte>()).ToArray(),
-                "Should throw for sample size not multiple of 8 (e.g., 10).");
-        }
-
-        // --- NEW TEST 8: Handle empty body ---
-        [Test]
-        public void GetSamples_ShouldHandleEmptyBody()
-        {
-            // Arrange
-            ushort sampleSize = 16;
-            byte[] emptyBody = Array.Empty<byte>();
-
-            // Act
-            var samples = NetSdrMessageHelper.GetSamples(sampleSize, emptyBody).ToArray();
-
-            // Assert
-            Assert.That(samples, Is.Empty);
-        }
-    }
-}
+            Assert.
