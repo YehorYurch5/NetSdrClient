@@ -70,25 +70,6 @@ namespace NetSdrClientAppTests
             Assert.That(type, Is.EqualTo(actualType));
         }
 
-        // ------------------------------------------------------------------
-        // GET HEADER TESTS (Length edge case coverage)
-        // ------------------------------------------------------------------
-
-        [Test]
-        public void GetHeader_ThrowsExceptionOnNegativeLength()
-        {
-            // Arrange / Act / Assert
-            Assert.Throws<ArgumentException>(() =>
-                NetSdrMessageHelper.GetControlItemMessage(
-                    NetSdrMessageHelper.MsgTypes.SetControlItem,
-                    NetSdrMessageHelper.ControlItemCodes.None,
-                    if (msgLength < 0 || lengthWithHeader > _maxMessageLength)
-            {
-                throw new ArgumentException("Message length exceeds allowed value");
-            }
-            ;
-        }
-
         [Test]
         public void GetHeader_ThrowsExceptionOnTooLongMessage()
         {
