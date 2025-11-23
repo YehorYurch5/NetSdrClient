@@ -5,12 +5,9 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
-// Припускаємо, що ITcpClient, ISystemTcpClient, INetworkStream вже оголошені
-// в інших файлах, таких як ITcpClient.cs та INetworkStream.cs
-
 namespace NetSdrClientApp.Networking
 {
-    // Адаптер для реального TcpClient (може залишатися тут або бути перенесеним)
+    // Adapter for the real TcpClient
     public class SystemTcpClientAdapter : ISystemTcpClient
     {
         private readonly TcpClient _client;
@@ -21,11 +18,11 @@ namespace NetSdrClientApp.Networking
         public void Connect(string host, int port) => _client.Connect(host, port);
         public void Dispose() => _client.Dispose();
 
-        // Повертаємо адаптер для NetworkStream
+        // Return adapter for NetworkStream
         public INetworkStream GetStream() => new NetworkStreamAdapter(_client.GetStream());
     }
 
-    // Адаптер для NetworkStream (може залишатися тут або бути перенесеним)
+    // Adapter for NetworkStream
     public class NetworkStreamAdapter : INetworkStream
     {
         private readonly NetworkStream _stream;
@@ -46,13 +43,12 @@ namespace NetSdrClientApp.Networking
 
     // -------------------------------------------------------------
 
-    // Основний клас. Тепер використовує зовнішні інтерфейси
+    // Main wrapper class
     public class TcpClientWrapper : ITcpClient
     {
         private readonly string _host;
         private readonly int _port;
 
-        // 🎯 Використовуємо ISystemTcpClient (визначений десь окремо)
         private ISystemTcpClient? _tcpClient;
         private INetworkStream? _stream;
         private CancellationTokenSource _cts;
@@ -61,14 +57,14 @@ namespace NetSdrClientApp.Networking
 
         public event EventHandler<byte[]>? MessageReceived;
 
-        // Фабрика для створення реальних клієнтів
+        // Factory for creating actual clients
         private readonly Func<ISystemTcpClient> _clientFactory;
 
-        // Конструктор для Production-коду
+        // Constructor for Production code
         public TcpClientWrapper(string host, int port)
             : this(host, port, () => new SystemTcpClientAdapter(new TcpClient())) { }
 
-        // Конструктор для DI та тестування
+        // Constructor for DI and testing
         public TcpClientWrapper(string host, int port, Func<ISystemTcpClient> clientFactory)
         {
             _host = host;
@@ -89,7 +85,13 @@ namespace NetSdrClientApp.Networking
 
             try
             {
-                _cts = new CancellationTokenSource();
+                // Create a new CTS only if needed
+                if (_cts == null || _cts.IsCancellationRequested)
+                {
+                    _cts?.Dispose();
+                    _cts = new CancellationTokenSource();
+                }
+
                 _tcpClient.Connect(_host, _port);
                 _stream = _tcpClient.GetStream();
                 Console.WriteLine($"Connected to {_host}:{_port}");
@@ -98,6 +100,9 @@ namespace NetSdrClientApp.Networking
             catch (Exception ex)
             {
                 Console.WriteLine($"Failed to connect: {ex.Message}");
+                // Ensure resources are nullified on failure
+                _tcpClient = null;
+                _stream = null;
             }
         }
 
@@ -109,7 +114,10 @@ namespace NetSdrClientApp.Networking
                 _stream?.Close();
                 _tcpClient?.Close();
 
-                _cts = null!;
+                // Dispose and reset CTS to a known state
+                _cts?.Dispose();
+                _cts = new CancellationTokenSource();
+
                 _tcpClient = null;
                 _stream = null;
                 Console.WriteLine("Disconnected.");
@@ -149,7 +157,7 @@ namespace NetSdrClientApp.Networking
 
         private async Task StartListeningAsync()
         {
-            var token = _cts!.Token;
+            var token = _cts.Token;
 
             if (Connected && _stream != null && _stream.CanRead)
             {
@@ -165,7 +173,7 @@ namespace NetSdrClientApp.Networking
 
                         if (bytesRead == 0)
                         {
-                            break;
+                            break; // Connection closed by remote host
                         }
 
                         if (bytesRead > 0)
@@ -176,7 +184,7 @@ namespace NetSdrClientApp.Networking
                 }
                 catch (OperationCanceledException)
                 {
-                    //empty
+                    // Cancellation requested
                 }
                 catch (Exception ex)
                 {
@@ -185,12 +193,13 @@ namespace NetSdrClientApp.Networking
                 finally
                 {
                     Console.WriteLine("Listener stopped.");
+                    // Disconnect is called here, which closes resources and cleans up state.
                     Disconnect();
                 }
             }
             else
             {
-                throw new InvalidOperationException("Not connected to a server.");
+                // Internal method, no action needed if not connected
             }
         }
     }
