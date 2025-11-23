@@ -219,7 +219,7 @@ namespace NetSdrClientAppTests.Networking
                     It.IsAny<int>(),
                     It.IsAny<int>(),
                     It.IsAny<CancellationToken>()))
-                // First call: returns 0 (EOF) -> triggers finally block -> Disconnect()
+                // FIX CS0308: Use ReturnsAsync(int) instead of Returns(Task<int>) for SetupSequence
                 .ReturnsAsync(0)
                 // Subsequent calls should not happen if logic is correct, but safe fallback
                 .Returns<byte[], int, int, CancellationToken>((buffer, offset, size, token) =>
